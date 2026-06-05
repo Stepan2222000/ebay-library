@@ -1,0 +1,10 @@
+*.egg-info/
+*.pyc
+.DS_Store
+.pytest_cache/
+.venv/
+CLAUDE.md
+__pycache__/
+ebay_data/
+specs/backup/
+tests/fixtures/

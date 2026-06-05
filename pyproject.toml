@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ebay-library"
+version = "0.0.1"
+description = "eBay parsing library — методы парсинга каталога и карточек для воркеров"
+requires-python = ">=3.11"
+dependencies = [
+    "beautifulsoup4",
+    "playwright",
+]
+
+[tool.setuptools.packages.find]
+include = ["ebay_library*"]

@@ -1,0 +1,71 @@
+"""T7 — парсинг item (PDP). Прогон: PYTHONPATH=. python3 tests/test_item.py"""
+
+from pathlib import Path
+
+from ebay_library import ParseError, parse_item_page
+
+FIX = Path(__file__).parent / "fixtures"
+
+# item_number → (condition, price_usd, shipping_cost, seller_username, last_updated is None?)
+EXPECTED = {
+    "277574984378": ("new", 47.50, 28.62, "fltoolbox", True),
+    "298318213452": ("new", 154.99, 21.16, "etaccessories", True),
+    "395640443895": ("new", 133.50, 0.0, "aftermarketparts3", False),
+    "116709108878": ("new", 78.75, 107.39, "australianjetskiparts", False),
+    "226914621386": ("new", 803.99, 23.25, "bootundmotor", False),
+    "356150673416": ("new", 232.62, 2.17, "tata-ca", False),
+}
+
+
+def _check(it):
+    assert it.item_number.isdigit(), it.item_number
+    assert it.title
+    assert it.condition in ("new", "other"), it.condition
+    assert it.price_usd > 0, it.price_usd
+    assert it.shipping_cost >= 0.0, it.shipping_cost
+    assert it.seller
+    assert it.location
+    assert it.specifics
+    assert it.image_urls and all(u.startswith("http") for u in it.image_urls)
+    assert isinstance(it.description, str)  # "" валидно (фикстуры без iframe-html)
+
+
+def test_items():
+    for num, (cond, price, ship, seller, lu_none) in EXPECTED.items():
+        html = (FIX / f"item_{num}.html").read_text(encoding="utf-8", errors="replace")
+        it = parse_item_page(html)
+        _check(it)
+        assert it.item_number == num, it.item_number
+        assert it.condition == cond, (num, it.condition)
+        assert abs(it.price_usd - price) < 0.01, (num, it.price_usd)
+        assert abs(it.shipping_cost - ship) < 0.01, (num, it.shipping_cost)
+        assert it.seller == seller, (num, it.seller)
+        assert (it.last_updated is None) == lu_none, (num, it.last_updated)
+
+
+def test_description_from_iframe_html():
+    main = (FIX / "item_277574984378.html").read_text(encoding="utf-8", errors="replace")
+    # без второго аргумента — описание пустое
+    assert parse_item_page(main).description == ""
+    # с переданным iframe-html — извлекаем текст
+    desc_html = "<html><body><p>Professionally packaged</p><script>x()</script></body></html>"
+    it = parse_item_page(main, desc_html)
+    assert it.description == "Professionally packaged", repr(it.description)
+
+
+def test_not_item_raises():
+    # caller гарантирует тип через page_state; если всё же подан не-item HTML —
+    # обязательное поле не найдётся → ParseError (не отдельный WrongPageError).
+    try:
+        parse_item_page("<html><body>nope</body></html>")
+    except ParseError:
+        pass
+    else:
+        raise AssertionError("expected ParseError")
+
+
+if __name__ == "__main__":
+    test_items()
+    test_description_from_iframe_html()
+    test_not_item_raises()
+    print("PASS")
