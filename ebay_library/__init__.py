@@ -5,6 +5,7 @@
 """
 
 from .config import EbayConfig
+from .download import fetch_images
 from .errors import AccessDeniedError, ErrorPageError, ParseError, ZipChangeError
 from .parsing.catalog import parse_search_page
 from .parsing.item import parse_item_page
@@ -28,4 +29,6 @@ __all__ = [
     # Слой 2 — методы воркера
     "warmup", "fetch_item", "fetch_catalog", "fetch_catalogs",
     "wait_until_ready", "set_zip", "current_zip",
+    # скачивание фото (HTTP-IO, без браузера)
+    "fetch_images",
 ]

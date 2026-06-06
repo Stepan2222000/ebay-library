@@ -9,6 +9,7 @@ description = "eBay parsing library — методы парсинга катал
 requires-python = ">=3.11"
 dependencies = [
     "beautifulsoup4",
+    "httpx",
     "playwright",
 ]
 
