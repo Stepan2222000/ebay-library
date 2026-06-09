@@ -1,35 +1,72 @@
-"""Конфиг библиотеки — общие параметры парсинга/навигации.
+"""Построение URL выдачи eBay (Слой 1, без сети и сайд-эффектов).
 
-Без сети и сайд-эффектов: только значения, которые потребляют слои 1 и 2.
-Воркер может создать свой ``EbayConfig(...)`` с другими значениями.
+Единственный источник URL поиска: артикул + страница + опциональные фильтры
+(ZIP доставки, состояние, цена). Воркер импортирует ``build_search_url`` и сам
+решает значения фильтров — дефолтов нет; рекомендованные значения — в README.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import urllib.parse
 
-# Шаблон URL выдачи. Подставляем артикул (`kw`) и номер страницы (`pgn`).
-# Фиксирован: cond=Used (LH_ItemCondition=3), 240 карточек на страницу.
-SEARCH_URL_TEMPLATE = (
-    "https://www.ebay.com/sch/i.html"
-    "?_nkw={kw}&_sacat=0&_from=R40&rt=nc&LH_ItemCondition=3&_ipg={ipg}&_pgn={pgn}"
-)
+# Карточек на страницу выдачи. Один источник: и для URL (`_ipg`), и для условия
+# конца пагинации (полная страница = ровно столько карточек).
+ITEMS_PER_PAGE = 240
+
+_SEARCH_BASE = "https://www.ebay.com/sch/i.html"
+
+# Состояние товара → код eBay `LH_ItemCondition`. "all" → фильтр не добавляем
+# (любое состояние). "new" = Brand New + New Other; "used" = Used / Pre-Owned.
+_CONDITION_CODES = {"new": 3, "used": 3000}
 
 
-@dataclass(frozen=True, slots=True)
-class EbayConfig:
-    """Параметры сессии парсинга eBay."""
+def _fmt_price(value: float) -> str:
+    """Цена в URL: целое без дробной части (50 → '50'), иначе как есть."""
+    f = float(value)
+    return str(int(f)) if f.is_integer() else str(value)
 
-    zip: str = "19701"
-    # Текст опции страны в модале смены ZIP. На eBay у <select> числовые
-    # порядковые value — выбираем по label, не по ISO-коду (см. catalog_selectors.md).
-    country_option: str = "United States - USA"
-    items_per_page: int = 240
-    search_url_template: str = SEARCH_URL_TEMPLATE
-    pardon_timeout_s: float = 180.0
 
-    def search_url(self, query: str, page: int = 1) -> str:
-        """URL выдачи для поискового запроса и номера страницы (1-based)."""
-        return self.search_url_template.format(
-            kw=query, ipg=self.items_per_page, pgn=page
-        )
+def build_search_url(
+    query: str,
+    *,
+    page: int = 1,
+    zip: str | None = None,
+    condition: str | None = None,
+    min_price: float | None = None,
+    max_price: float | None = None,
+) -> str:
+    """URL страницы выдачи eBay для поискового запроса (артикула).
+
+    Структурные части всегда: ``_nkw`` (запрос, URL-энкодится), ``_ipg=240``,
+    ``_pgn`` (страница, 1-based). Опциональные фильтры — только если заданы:
+
+    - ``zip`` → ``_stpos``: индекс доставки. Без него часть карточек рендерится
+      без доставки ("Shipping not specified") и парсер падает — на практике
+      задавайте всегда (рекоменд. "19701", см. README).
+    - ``condition`` → ``LH_ItemCondition``: ``"all"`` (или ``None``) — без
+      фильтра; ``"new"`` = New (Brand New + New Other); ``"used"`` = Used /
+      Pre-Owned. Другое значение → ``ValueError``.
+    - ``min_price`` → ``_udlo``, ``max_price`` → ``_udhi``: границы цены (USD).
+    """
+    params: list[tuple[str, object]] = [
+        ("_nkw", query),
+        ("_sacat", "0"),
+        ("_from", "R40"),
+        ("rt", "nc"),
+        ("_ipg", ITEMS_PER_PAGE),
+        ("_pgn", page),
+    ]
+    if condition is not None and condition != "all":
+        try:
+            params.append(("LH_ItemCondition", _CONDITION_CODES[condition]))
+        except KeyError:
+            raise ValueError(
+                f"condition must be 'all', 'new' or 'used', got {condition!r}"
+            ) from None
+    if zip is not None:
+        params.append(("_stpos", zip))
+    if min_price is not None:
+        params.append(("_udlo", _fmt_price(min_price)))
+    if max_price is not None:
+        params.append(("_udhi", _fmt_price(max_price)))
+    return _SEARCH_BASE + "?" + urllib.parse.urlencode(params)

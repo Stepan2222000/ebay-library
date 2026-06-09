@@ -26,7 +26,3 @@ class AccessDeniedError(Exception):
 
 class ErrorPageError(Exception):
     """Транзиентный 'Error Page | eBay' — retryable, обработку решает воркер."""
-
-
-class ZipChangeError(Exception):
-    """Смена ZIP не подтвердилась (вариант не найден или ZIP ≠ заданный)."""

@@ -185,113 +185,21 @@ for li in soup.select(".srp-results > li"):
 
 ---
 
-## UI «Shipping to» — смена адреса доставки
+## ZIP доставки — параметр URL (не UI)
 
-Проверено live (декабрь 2025, US-прокси; дополнено июнь 2026). eBay
-переименовал классы: старые `srp-shipping-location__flyout` /
-`gh-ship-to__menu` больше не рендерятся, всё переехало на префикс
-`s-zipcode-entry`.
+Смена ZIP через UI **удалена**. ZIP задаётся параметром `_stpos=<zip>` в URL
+выдачи (`config.build_search_url`, см. [catalog_flow.md](catalog_flow.md)) — это
+**реальная локация**, не косметика: доставка пересчитывается под ZIP
+(подтверждено live на US-прокси, июнь 2026 — 19701 vs Аляска 99950 дают разные
+суммы доставки/число результатов). Состояние — `LH_ItemCondition` (`3`=new,
+`3000`=used), цена — `_udlo`/`_udhi`. Селекторов ZIP-флоу в коде больше нет.
 
-⚠️ **Два варианта вёрстки, sticky на браузерный контекст** (внутри контекста
-вариант не меняется между страницами/запросами; разные контексты случайно
-попадают в разные группы; триггеры взаимоисключающие). Ниже — основной
-(spotlight) вариант; A/B-вариант — в конце раздела. Зачем ZIP обязателен,
-дефолт `00-001`, почему `_stpos` в URL не работает — [catalog_flow.md](catalog_flow.md).
-
-### Триггер в левом сайдбаре
-
-```
-.x-refine-shipping-spotlight  button.s-zipcode-entry__btn
-```
-
-Полный HTML:
-
-```html
-<div class="x-refine-shipping-spotlight">
-  <div class="s-zipcode-entry has-location-icon">
-    <button class="s-zipcode-entry__btn s-zipcode-entry__btn--inline fake-link" type="button">
-      <span class="clipped">Update your location</span>
-      <svg>…location icon…</svg>
-      Shipping to<span class="s-zipcode-entry__label">19701</span>
-    </button>
-  </div>
-</div>
-```
-
-ZIP отдельно — внутри `.s-zipcode-entry__label`. На странице также есть
-другие `button.s-zipcode-entry__btn` (для Local Pickup, для radio location в
-секции LH_PrefLoc) — обязательно префиксуем `.x-refine-shipping-spotlight`,
-иначе матчит лишнее.
-
-### Модал «Update your location»
-
-Появляется после клика по триггеру (рендерится лениво). Структура:
-
-```
-.s-zipcode-entry__modal--delivery
-  .srp-shipping-location          ← форма с country/zip
-  .s-zipcode-entry__apply
-    button.btn.btn--secondary     ← Cancel
-    button.btn.btn--primary       ← Apply
-```
-
-Из live-теста: оборачивающий контейнер — `div.lightbox-dialog__window`
-(generic), внутри лежит `.s-zipcode-entry__modal--delivery`.
-
-### Поле «Select country»
-
-```
-.s-zipcode-entry__modal--delivery select
-```
-
-⚠️ Значения опций — **числовые порядковые id** (`United States` = `value="1"`,
-`Afghanistan` = `value="4"`, …), НЕ ISO-коды. `select_option(value="US")` не
-работает. Выбираем **по тексту опции** (`United States - USA`):
-`select_option(label="United States - USA")` или по подстроке `United States`.
-Подтверждено live (en-US, июнь 2026): числовой id порядковый и может плыть —
-завязываться на конкретное число нельзя.
-
-### Поле «Zip code»
-
-```
-.s-zipcode-entry__modal--delivery input[type="text"]
-```
-
-### Кнопка Apply
-
-```
-.s-zipcode-entry__apply button.btn--primary
-```
-
-(Старого `input[type="submit"].btn--primary` больше нет — теперь обычный
-`button`. Селектор `form.srp-shipping-location__form` тоже не работает —
-форма как блок есть, но без класса `__form`. Cancel не парсим — он не нужен.)
-
-### Нюансы флоу (подтверждено live)
-
-- Модал «не visible» по меркам Playwright (нет offsetParent) — ждать
-  `select` со `state="attached"`, не `visible`.
-- Один клик по триггеру открывает модал за ~0.1–0.3с (8/8 live, ретрай не
-  нужен; ранние «провалы клика» оказались A/B-контекстами, где этого
-  триггера нет вовсе).
-- После Apply eBay меняет URL и перерисовывает выдачу; подтверждение —
-  по факту: ждать, пока текущий ZIP на странице станет равным заданному.
-
-### A/B-вариант вёрстки
-
-Когда контекст попал в A/B-группу, spotlight-блока нет вовсе. Селекторы:
-
-| что | селектор |
-|---|---|
-| триггер | `button.shipping-entry` (текст «Update your location / Shipping to NNNNN») |
-| страна | `div[role=dialog] select` — в диалоге несколько select; брать видимый со страновыми опциями (`"Country - ISO3"`) |
-| zip | `input[name='_stpos']` |
-| apply | `div[role=dialog] button.btn--primary` (видимый) |
-| текущий ZIP | число из текста триггера («Shipping to 19701») — отдельного label нет |
-
-Формат label страны общий для обоих вариантов: `United States - USA`.
-Реализация обоих вариантов — `ebay_library/worker/zipcode.py` + `parsing/selectors.py`
-(`ZipSpotlight` / `ZipAb`).
+⚠️ Вёрстка SRP зависит от **страны IP** (не от браузера — проверено Chrome и
+CloakBrowser, локально и на сервере под Xvfb). US-IP → каноническая вёрстка
+(`srp-mag-ui-variant2`), цены USD. Не-US IP (напр. CZ) → локализованная вёрстка
+с топ-бар flyout `.srp-shipping-location__flyout` и местной валютой;
+URL-параметром на US-вёрстку не переключить (только US-IP). Воркер ходит через
+US-прокси, поэтому flyout-вариант в проде не задействуется.
 
 ---
 

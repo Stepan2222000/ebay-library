@@ -12,13 +12,12 @@ from __future__ import annotations
 
 import asyncio
 
-from ..config import EbayConfig
+from ..config import ITEMS_PER_PAGE, build_search_url
 from ..parsing.catalog import parse_search_page
 from ..parsing.item import parse_item_page
 from ..parsing.models import Catalog, CatalogBatch, CatalogItem, ItemPage
 from ..parsing.page_state import PageKind
 from .navigation import wait_until_ready
-from .zipcode import set_zip
 
 _HOME_URL = "https://www.ebay.com/"
 _ITEM_URL = "https://www.ebay.com/itm/{item_id}"
@@ -72,28 +71,31 @@ async def _fetch_srp(page, url: str):
     return parse_search_page(await page.content())
 
 
-async def fetch_catalog(page, query: str, config: EbayConfig | None = None) -> Catalog:
+async def fetch_catalog(
+    page,
+    query: str,
+    *,
+    zip: str | None = None,
+    condition: str | None = None,
+    min_price: float | None = None,
+    max_price: float | None = None,
+) -> Catalog:
     """Собирает весь каталог по одной подзадаче (поисковому запросу): проходит
     страницы выдачи, склеивает карточки (дедуп по item_id, порядок сохранён).
 
-    ZIP ставится один раз перед первой страницей (доставка в карточках от него
-    зависит; set_zip идемпотентен). Идём по страницам, пока страница ПОЛНАЯ
-    (ровно items_per_page карточек). Неполная страница (< items_per_page) —
-    последняя (eBay за концом не отдаёт пустую, а клампит на последнюю — поэтому
-    стоп по «<240», а не по «0 карточек»). Между соседними страницами выдача
-    нахлёстывается — спасает дедуп по item_id. Ранний стоп — сепаратор
-    fewer-words. Счётчик результатов справочный, циклом не управляет. Любой сбой
-    пробрасывается наружу — подзадача падает целиком (в блоке её изолирует
-    fetch_catalogs)."""
-    config = config or EbayConfig()
-    ipg = config.items_per_page
+    ZIP/состояние/цена задаются ЧЕРЕЗ URL (``build_search_url``) на каждой
+    странице — отдельной UI-установки ZIP больше нет. Фильтры опциональны, но
+    ``zip`` на практике нужен (без него доставка не рендерится и парсер падает;
+    рекоменд. "19701"); ``condition``: "all"/"new"/"used".
 
-    # Первый заход на SRP — только дождаться готовности и выставить ZIP, БЕЗ
-    # парсинга: без ZIP у части карточек доставка не показана ("Shipping not
-    # specified") и парс упал бы (подтверждено live). ZIP — кука контекста.
-    await page.goto(config.search_url(query, 1), wait_until="domcontentloaded")
-    await wait_until_ready(page, PageKind.SRP)
-    await set_zip(page, config)
+    Идём по страницам, пока страница ПОЛНАЯ (ровно ITEMS_PER_PAGE карточек).
+    Неполная страница (< ITEMS_PER_PAGE) — последняя (eBay за концом не отдаёт
+    пустую, а клампит на последнюю — стоп по «<240», а не по «0 карточек»).
+    Между соседними страницами выдача нахлёстывается — спасает дедуп по item_id.
+    Ранний стоп — сепаратор fewer-words. Счётчик результатов справочный, циклом
+    не управляет. Любой сбой пробрасывается наружу — подзадача падает целиком
+    (в блоке её изолирует fetch_catalogs)."""
+    filters = dict(zip=zip, condition=condition, min_price=min_price, max_price=max_price)
 
     items: list[CatalogItem] = []
     seen: set[str] = set()
@@ -109,14 +111,14 @@ async def fetch_catalog(page, query: str, config: EbayConfig | None = None) -> C
     has_sep = False
     pgn = 1
     while True:
-        sp = await _fetch_srp(page, config.search_url(query, pgn))
+        sp = await _fetch_srp(page, build_search_url(query, page=pgn, **filters))
         pages_fetched += 1
         if pgn == 1:
             results_count = sp.results_count
         has_sep = has_sep or sp.has_fewer_words_sep
         add(sp.items)
         # Стоп: дошли до «похожих» (fewer-words) либо страница неполная (последняя).
-        if sp.has_fewer_words_sep or len(sp.items) < ipg:
+        if sp.has_fewer_words_sep or len(sp.items) < ITEMS_PER_PAGE:
             break
         pgn += 1
 
@@ -130,17 +132,23 @@ async def fetch_catalog(page, query: str, config: EbayConfig | None = None) -> C
 
 
 async def fetch_catalogs(
-    page, queries: list[str], config: EbayConfig | None = None
+    page,
+    queries: list[str],
+    *,
+    zip: str | None = None,
+    condition: str | None = None,
+    min_price: float | None = None,
+    max_price: float | None = None,
 ) -> CatalogBatch:
     """Парсит блок подзадач (список запросов) на одном ``page``, возвращает
-    объединённый список карточек без дублей.
+    объединённый список карточек без дублей. Фильтры (zip/condition/цена)
+    применяются ко всем подзадачам (через URL).
 
     Подзадачи идут по порядку. Упавшая подзадача НЕ валит блок — её ошибка
     попадает в ``errors`` (оркестратор переотдаст позже), остальные продолжают.
     Дедуп item_id глобальный по всему блоку (первое вхождение побеждает): один
-    товар, найденный по разным запросам, в общий список идёт один раз. ZIP
-    ставится при первой подзадаче (внутри fetch_catalog, идемпотентно)."""
-    config = config or EbayConfig()
+    товар, найденный по разным запросам, в общий список идёт один раз."""
+    filters = dict(zip=zip, condition=condition, min_price=min_price, max_price=max_price)
     items: list[CatalogItem] = []
     seen: set[str] = set()
     per_query: dict[str, Catalog] = {}
@@ -148,7 +156,7 @@ async def fetch_catalogs(
 
     for query in queries:
         try:
-            cat = await fetch_catalog(page, query, config)
+            cat = await fetch_catalog(page, query, **filters)
         except Exception as e:  # изолируем сбой подзадачи — блок не падает
             errors[query] = f"{type(e).__name__}: {e}"
             continue

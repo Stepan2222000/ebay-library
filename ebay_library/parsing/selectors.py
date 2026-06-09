@@ -54,24 +54,8 @@ class Item:
     DESC_IFRAME = "iframe#desc_ifr"
 
 
-# --- Смена ZIP на SRP ------------------------------------------------------
-# eBay отдаёт ДВА варианта вёрстки SRP (sticky на контекст): spotlight (наш) и
-# A/B. У них разные селекторы ZIP-флоу — set_zip определяет вариант и берёт
-# нужный набор. Формат label страны общий: "United States - USA".
-class ZipSpotlight:
-    TRIGGER = ".x-refine-shipping-spotlight button.s-zipcode-entry__btn"
-    LABEL = ".x-refine-shipping-spotlight .s-zipcode-entry__label"
-    COUNTRY = ".s-zipcode-entry__modal--delivery select"
-    ZIP_INPUT = ".s-zipcode-entry__modal--delivery input[type='text']"
-    APPLY = ".s-zipcode-entry__apply button.btn--primary"
-
-
-class ZipAb:
-    TRIGGER = "button.shipping-entry"
-    COUNTRY = "div[role=dialog] select"          # выбираем по label среди видимых
-    ZIP_INPUT = "input[name='_stpos']"
-    APPLY = "div[role=dialog] button.btn--primary"
-    # ZIP читается из текста триггера: "Update your location\nShipping to 19701"
+# ZIP доставки больше не ставится через UI — он задаётся параметром URL
+# (`_stpos`, см. config.build_search_url). Селекторов ZIP-флоу нет.
 
 
 # --- Главная (HOME) --------------------------------------------------------
