@@ -13,9 +13,10 @@ from __future__ import annotations
 import asyncio
 
 from ..config import ITEMS_PER_PAGE, build_search_url
+from ..fx import convert_cards
 from ..parsing.catalog import parse_search_page
 from ..parsing.item import parse_item_page
-from ..parsing.models import Catalog, CatalogBatch, CatalogItem, ItemPage
+from ..parsing.models import Catalog, CatalogBatch, CatalogItem, ItemPage, SrpCard
 from ..parsing.page_state import PageKind
 from .navigation import wait_until_ready
 
@@ -93,18 +94,23 @@ async def fetch_catalog(
     пустую, а клампит на последнюю — стоп по «<240», а не по «0 карточек»).
     Между соседними страницами выдача нахлёстывается — спасает дедуп по item_id.
     Ранний стоп — сепаратор fewer-words. Счётчик результатов справочный, циклом
-    не управляет. Любой сбой пробрасывается наружу — подзадача падает целиком
-    (в блоке её изолирует fetch_catalogs)."""
+    не управляет.
+
+    Цены/доставка приводятся к USD: после сбора всех страниц один параллельный
+    батч через fx-эндпоинт (``fx.convert_cards``); итоговые ``CatalogItem``
+    содержат суммы в USD. Любой сбой (блок/таймаут/ParseError/сбой fx)
+    пробрасывается наружу — подзадача падает целиком (в блоке её изолирует
+    fetch_catalogs)."""
     filters = dict(zip=zip, condition=condition, min_price=min_price, max_price=max_price)
 
-    items: list[CatalogItem] = []
+    cards: list[SrpCard] = []
     seen: set[str] = set()
 
-    def add(page_items: list[CatalogItem]) -> None:
-        for it in page_items:
-            if it.item_id not in seen:
-                seen.add(it.item_id)
-                items.append(it)
+    def add(page_cards: list[SrpCard]) -> None:
+        for c in page_cards:
+            if c.item_id not in seen:
+                seen.add(c.item_id)
+                cards.append(c)
 
     results_count = 0
     pages_fetched = 0
@@ -121,6 +127,10 @@ async def fetch_catalog(
         if sp.has_fewer_words_sep or len(sp.items) < ITEMS_PER_PAGE:
             break
         pgn += 1
+
+    # Все страницы собраны и дедуплены — один параллельный батч /convert на весь
+    # каталог: цены/доставка из native-валюты в USD (см. fx.convert_cards).
+    items = await convert_cards(cards)
 
     return Catalog(
         query=query,

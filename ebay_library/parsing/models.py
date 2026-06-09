@@ -8,27 +8,47 @@ from dataclasses import dataclass
 
 
 @dataclass(frozen=True, slots=True)
-class CatalogItem:
-    """Одна карточка выдачи (SRP). URL не храним — формируется из item_id."""
+class SrpCard:
+    """Сырая карточка выдачи — что отрисовал eBay (Слой 1, без сети).
 
-    item_id: str            # 12 цифр (placeholder "Shop on eBay" отсеян)
+    Цена/доставка — в ИСХОДНОЙ валюте листинга (как на сайте), валюта — в
+    ``currency_raw`` (токен 'US $'/'C $'/'£'/'EUR'…). Перевод в USD делает
+    fx.convert_cards (Слой 2) → CatalogItem. URL не храним — из item_id."""
+
+    item_id: str               # 12 цифр (placeholder "Shop on eBay" отсеян)
+    title: str                 # без суффикса "Opens in a new window or tab"
+    condition: str             # нормализованное: "new" | "other"
+    price: float               # сумма в исходной валюте
+    currency_raw: str          # валютный токен как на сайте ('$','US $','C $','EUR'…)
+    shipping_cost: float | None  # исходная валюта; 0.0=Free; None="Shipping not specified"
+    seller: str
+    location: str | None       # из "Located in <...>"; eBay рендерит лениво/не всегда
+    image_url: str
+
+
+@dataclass(frozen=True, slots=True)
+class CatalogItem:
+    """Карточка выдачи с ценой В USD — итог для воркера (Слой 2).
+
+    Получается из SrpCard конвертацией через fx-микросервис. Исходную валюту
+    не храним (по контракту — только USD). URL не храним — из item_id."""
+
+    item_id: str            # 12 цифр
     title: str              # без суффикса "Opens in a new window or tab"
     condition: str          # нормализованное: "new" | "other"
-    price: float
-    currency: str           # общая для price и shipping (USD/EUR/CAD/AUD/GBP)
-    shipping_cost: float    # 0.0 = Free
+    price: float            # в USD
+    shipping_cost: float | None  # в USD; 0.0=Free; None="Shipping not specified"
     seller: str
-    location: str | None    # из "Located in <...>"; eBay рендерит лениво/не всегда —
-                            # None допустим (точный location берём с item-страницы)
+    location: str | None    # из "Located in <...>"; None допустим (lazy-рендер)
     image_url: str
 
 
 @dataclass(frozen=True, slots=True)
 class SearchPage:
-    """Результат парсинга одной страницы выдачи."""
+    """Результат парсинга одной страницы выдачи (сырьё, до конвертации в USD)."""
 
     results_count: int            # из заголовка srp-controls__count-heading
-    items: list[CatalogItem]      # только точные (до сепаратора fewer-words)
+    items: list[SrpCard]          # только точные (до сепаратора fewer-words)
     has_fewer_words_sep: bool     # встречен ли сепаратор «Results matching fewer words»
 
 

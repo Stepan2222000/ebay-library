@@ -53,18 +53,22 @@ li.s-card  .s-card__subtitle  .su-styled-text
 li.s-card  .s-card__price
 ```
 
-Парсим строку в `price` (float) и `currency`:
-- `$` без префикса → USD
-- `US $` → USD,  `CA $` → CAD,  `AU $` → AUD
-- `£` → GBP,  `€` → EUR
+Парсим строку в `price` (float, в ИСХОДНОЙ валюте) и `currency_raw` (валютный
+токен **как на сайте**, без маппинга в код). Валюту НЕ нормализуем в библиотеке —
+сырой токен резолвит fx-микросервис при конвертации в USD (единый источник
+написаний — `fx.currency_aliases`, см. [catalog_flow.md](catalog_flow.md)).
 
-Regex:
+Токен = всё до первой цифры; сумма — US-формат (запятая=тысячи, точка=десятич;
+eBay на .com так печатает ВСЕ валюты, в т.ч. `EUR 19.99`, `C $20.55`):
 
 ```
-^(?P<cur>(?:US|CA|AU)?\s?[$£€]|EUR|GBP|CAD)\s?(?P<amount>[\d,]+(?:\.\d+)?)
+^(?P<cur>\D*?)(?P<amount>\d[\d,]*(?:\.\d{1,2})?)
 ```
 
-Диапазон (`$10.00 to $15.00`) — два поля `price_min` / `price_max`.
+Примеры токенов live: `$`, `US $`, `C $`, `AU $`, `EUR`, `£`, `€` (на US-прокси
+почти всегда `$`/USD). Пустой токен (нет валютного префикса) → `ParseError`.
+
+Диапазон (`$10.00 to $15.00`) не парсим — `ParseError("price")` (по `" to "`).
 
 ### Стоимость доставки
 
@@ -76,9 +80,14 @@ Regex:
 
 ```
 ^Free\b.*\b(delivery|shipping|postage|P&P)\b                               → 0.0
-^\+?\s?(?P<cur>[A-Z]{0,3}\s?[$£€])\s?(?P<amount>[\d,]+(?:\.\d+)?)\s+(delivery|shipping|postage|P&P|shipping estimate)\b
+^\+?\s*\D*?(?P<amount>\d[\d,]*(?:\.\d{1,2})?)\s+(delivery|shipping|postage|P&P)\b
 ^Shipping not specified$                                                    → None
 ```
+
+Валютный токен платной строки не сохраняем (валюта доставки = валюта цены
+карточки, `currency_raw`); токен в regex — это `\D*?` (любой), ключевое слово
+доставки обязательно. `delivery` покрывает и `+$X delivery`, `shipping` —
+и `+$X shipping estimate`.
 
 ⚠️ В `Free`-правиле ключевое слово доставки **обязательно**: в тех же
 `.s-card__attribute-row` лежит `Free returns` — без требования keyword

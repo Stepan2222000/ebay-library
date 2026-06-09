@@ -15,39 +15,35 @@ import re
 from bs4 import BeautifulSoup
 
 from ..errors import ParseError
-from .models import CatalogItem, SearchPage
+from .models import SearchPage, SrpCard
 from .normalize import KNOWN_CONDITIONS, normalize_condition
 from .selectors import Srp
 
 
 _TITLE_SUFFIX = "Opens in a new window or tab"
-_CURRENCY = {
-    "$": "USD", "US $": "USD", "CA $": "CAD", "C $": "CAD",
-    "AU $": "AUD", "£": "GBP", "€": "EUR", "EUR": "EUR",
-}
 
-_PRICE_RE = re.compile(
-    r"(?P<cur>US\s?\$|CA\s?\$|C\s?\$|AU\s?\$|\$|£|€|EUR)\s?"
-    r"(?P<amount>[\d,]+(?:\.\d{1,2})?)"
-)
+# Цену НЕ маппим в код валюты — ловим ЛЮБОЙ валютный токен (всё до первой
+# цифры) + сумму в US-формате (запятая=тысячи, точка=десятич; eBay на .com так
+# печатает все валюты, в т.ч. "EUR 19.99"/"C $20.55"). Сам токен ('$','US $',
+# 'C $','£','EUR'…) резолвит fx-микросервис при конвертации — единый источник
+# истины написаний (fx.currency_aliases).
+_PRICE_RE = re.compile(r"^(?P<cur>\D*?)(?P<amount>\d[\d,]*(?:\.\d{1,2})?)")
 _FREE_RE = re.compile(r"^Free\b.*\b(delivery|shipping|postage|P&P)\b", re.I)
+# Платная доставка: '+<токен><сумма> delivery/shipping…' — токен любой (его не
+# сохраняем; валюта доставки = валюта цены карточки). Ключевое слово обязательно
+# (иначе наивный матч поймал бы 'Free returns'/'30 days' и т.п.).
 _PAID_RE = re.compile(
-    r"^\+?\s?(?:US\s?\$|CA\s?\$|C\s?\$|AU\s?\$|\$|£|€)\s?"
-    r"(?P<amount>[\d,]+(?:\.\d{1,2})?)\s+(delivery|shipping|postage|P&P)\b",
+    r"^\+?\s*\D*?(?P<amount>\d[\d,]*(?:\.\d{1,2})?)\s+(delivery|shipping|postage|P&P)\b",
     re.I,
 )
 _SELLER_RE = re.compile(r"^(?P<seller>.+?)\s+\d+(?:\.\d+)?%\s+positive", re.I)
-
-
-def _norm_currency(cur: str) -> str | None:
-    return _CURRENCY.get(re.sub(r"\s+", " ", cur).strip())
 
 
 def _to_float(amount: str) -> float:
     return float(amount.replace(",", ""))
 
 
-def _parse_card(card) -> CatalogItem:
+def _parse_card(card) -> SrpCard:
     item_id = card.get("data-listingid", "")
     raw_html = str(card)
 
@@ -75,12 +71,12 @@ def _parse_card(card) -> CatalogItem:
     praw = pe.get_text(" ", strip=True) if pe else None
     if not praw or " to " in praw.lower():
         raise ParseError("price", praw, item_id, raw_html)
-    pm = _PRICE_RE.search(praw)
+    pm = _PRICE_RE.match(re.sub(r"\s+", " ", praw).strip())
     if not pm:
         raise ParseError("price", praw, item_id, raw_html)
     price = _to_float(pm.group("amount"))
-    currency = _norm_currency(pm.group("cur"))
-    if currency is None:
+    currency_raw = pm.group("cur").strip()  # сырой токен ('$','US $','C $'…) — переведёт fx
+    if not currency_raw:
         raise ParseError("currency", praw, item_id, raw_html)
 
     shipping_cost = None
@@ -128,12 +124,12 @@ def _parse_card(card) -> CatalogItem:
     if not image_url:
         raise ParseError("image_url", None, item_id, raw_html)
 
-    return CatalogItem(
+    return SrpCard(
         item_id=item_id,
         title=title,
         condition=condition,
         price=price,
-        currency=currency,
+        currency_raw=currency_raw,
         shipping_cost=shipping_cost,
         seller=seller,
         location=location,
@@ -156,7 +152,7 @@ def parse_search_page(html: str) -> SearchPage:
         raise ParseError("results_count", None, None, html)
 
     has_fewer_words_sep = False
-    items: list[CatalogItem] = []
+    items: list[SrpCard] = []
     for li in soup.select(Srp.RESULTS_LI):
         sep = li.select_one(Srp.FEWER_WORDS_SEP)
         if sep and "fewer words" in sep.get_text().lower():

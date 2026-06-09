@@ -13,8 +13,8 @@ def _check_items(items):
         assert it.title
         assert it.condition in ("new", "other"), it.condition
         assert it.price > 0, it.price
-        assert it.currency == "USD", it.currency
-        assert it.shipping_cost >= 0.0, it.shipping_cost
+        assert it.currency_raw, it.item_id  # сырой токен валюты ('$','C $'…)
+        assert it.shipping_cost is None or it.shipping_cost >= 0.0, it.shipping_cost
         # seller — чистый ник, без рейтинга/счётчиков
         assert it.seller, it.item_id
         assert not it.seller.isdigit(), it.seller
@@ -71,9 +71,30 @@ def test_not_srp_raises():
         raise AssertionError("expected ParseError")
 
 
+def test_convert_cards_live():
+    # живой fx-эндпоинт: SrpCard (native + токен) → CatalogItem (USD). Прогон
+    # требует сети до fx-сервиса (FX_API_URL). Все карточки фикстуры — '$'/USD,
+    # значит price_usd == price native до цента.
+    import asyncio
+
+    from ebay_library import convert_cards
+
+    html = (FIX / "srp_8M6000623_enUS.html").read_text(encoding="utf-8", errors="replace")
+    cards = parse_search_page(html).items
+    items = asyncio.run(convert_cards(cards))
+    assert len(items) == len(cards)
+    for c, it in zip(cards, items):
+        assert it.item_id == c.item_id
+        assert not hasattr(it, "currency_raw")  # валюту в итоге не храним
+        if c.currency_raw == "$":  # USD → сумма не меняется
+            assert it.price == c.price, (c.price, it.price)
+        assert it.price > 0
+
+
 if __name__ == "__main__":
     test_srp_8M6000623()
     test_srp_3211206()
     test_srp_8M0142836_no_location()
     test_not_srp_raises()
+    test_convert_cards_live()
     print("PASS")
