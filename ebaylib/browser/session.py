@@ -52,6 +52,7 @@ _ITEM_URL = "https://www.ebay.com/itm/{item_id}"
 _DESC_FRAME_HOST = "ebaydesc.com"
 DESC_TIMEOUT_S = 15.0
 PAGE_DELAY_S = 7.0   # фикс. пауза перед каждым replacement-запросом новой страницы
+MAX_PAGES = 5        # лимит страниц выдачи на запрос (дефолт fetch_catalog)
 
 
 def _page_dead(exc: BaseException) -> bool:
@@ -148,14 +149,16 @@ class EbaySession:
         condition: str | None = None,
         min_price: float | None = None,
         max_price: float | None = None,
+        max_pages: int = MAX_PAGES,
     ) -> CatalogResult:
         """Каталоги по запросу или списку запросов — один универсальный вход.
 
         По каждому запросу проходит страницы выдачи (стоп: сепаратор
-        fewer-words либо неполная страница; нахлёст соседних страниц гасится
-        дедупом по item_id), после сбора страниц запроса один fx-батч
-        переводит цены/доставку в USD. Дубликаты запросов отбрасываются
-        (порядок сохраняется, на eBay повторно не ходим).
+        fewer-words, неполная страница либо лимит ``max_pages`` на запрос —
+        по умолчанию 5; нахлёст соседних страниц гасится дедупом по item_id),
+        после сбора страниц запроса один fx-батч переводит цены/доставку в
+        USD. Дубликаты запросов отбрасываются (порядок сохраняется, на eBay
+        повторно не ходим).
 
         Фильтры (``zip``/``condition``/``min_price``/``max_price``) задаются
         через URL на каждой странице и применяются ко всем запросам; ``zip``
@@ -202,9 +205,13 @@ class EbaySession:
                     if c.item_id not in qseen:
                         qseen.add(c.item_id)
                         cards.append(c)
-                # Стоп: дошли до «похожих» (fewer-words) либо страница неполная
-                # (последняя; eBay за концом не отдаёт пустую — клампит).
+                # Стоп: дошли до «похожих» (fewer-words), страница неполная
+                # (последняя; eBay за концом не отдаёт пустую — клампит) либо
+                # упёрлись в лимит страниц на запрос.
                 if sp.has_fewer_words_sep or len(sp.items) < ITEMS_PER_PAGE:
+                    break
+                if pgn >= max_pages:
+                    logger.debug("srp %r: page cap %d reached", query, max_pages)
                     break
                 pgn += 1
 
