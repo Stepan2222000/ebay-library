@@ -93,12 +93,17 @@ def parse_item_page(html: str, description_html: str | None = None) -> ItemPage:
     price_usd = _to_float(pm.group(0))
 
     # Доставка в USD: Free → 0.0; intl → "(approx US $X)"; US → "US $X" в начале.
-    # Цену выбить обязаны — иначе ParseError (None не ставим).
+    # Продавец не настроил доставку до ZIP — суммы на странице нет, eBay пишет
+    # "Will ship to United States. Read item description or contact seller for
+    # shipping options" (live 2026-06-10, напр. 174601590686) → None.
+    # Прочие непарсящиеся форматы — по-прежнему ParseError.
     ship_raw = _txt(soup.select_one(S.SHIPPING))
     if not ship_raw:
         raise ParseError("shipping_cost", None, item_number, html)
     if re.match(r"^Free\b", ship_raw, re.I):
         shipping_cost = 0.0
+    elif "contact seller" in ship_raw.lower():
+        shipping_cost = None
     else:
         sm = re.search(
             r"approx\s+US\s?\$\s?(" + _AMOUNT + r")", ship_raw, re.I

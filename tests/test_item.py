@@ -22,7 +22,8 @@ def _check(it):
     assert it.title
     assert it.condition in ("new", "other"), it.condition
     assert it.price_usd > 0, it.price_usd
-    assert it.shipping_cost >= 0.0, it.shipping_cost
+    # None — продавец не указал доставку («contact seller», суммы на PDP нет)
+    assert it.shipping_cost is None or it.shipping_cost >= 0.0, it.shipping_cost
     assert it.seller
     assert it.location
     assert it.specifics

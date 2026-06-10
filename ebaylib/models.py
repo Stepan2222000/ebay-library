@@ -80,7 +80,9 @@ class CatalogResult:
 
 @dataclass(frozen=True, slots=True)
 class ItemPage:
-    """Страница товара (PDP). Все поля обязательны, кроме last_updated.
+    """Страница товара (PDP). Все поля обязательны, кроме last_updated и
+    shipping_cost (None — продавец не указал доставку до ZIP: eBay пишет
+    «…contact seller for shipping options» без суммы).
 
     Цена и доставка — всегда в USD (на intl-листингах берётся
     «Approximately US $X»). Описание — текст из iframe-описания.
@@ -90,10 +92,10 @@ class ItemPage:
     title: str                  # без суффикса "Opens in a new window or tab"
     condition: str              # нормализованное: "new" | "other"
     price_usd: float            # итоговая цена в USD (approx если intl, иначе primary)
-    shipping_cost: float        # в USD; 0.0 = Free
+    shipping_cost: float | None  # в USD; 0.0 = Free; None — «contact seller», суммы нет
     seller: str                 # username продавца (как в каталоге)
     location: str               # из "Located in: <...>"
     specifics: dict[str, str]   # вся таблица характеристик (key → value)
-    image_urls: list[str]       # full-size (data-zoom-src), дедуп
+    image_urls: list[str]       # большие версии фото (s-l1600, клампится к оригиналу), дедуп
     description: str            # текст из iframe-описания ("" — валидно, если пусто)
     last_updated: str | None    # дата правки листинга, если есть; иначе None
