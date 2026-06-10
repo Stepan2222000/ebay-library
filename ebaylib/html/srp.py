@@ -78,11 +78,11 @@ def _parse_card(card) -> SrpCard:
     if not currency_raw:
         raise ParseError("currency", praw, item_id, raw_html)
 
-    # Доставка ОПЦИОНАЛЬНА (None) в двух подтверждённых live случаях
-    # (2026-06-10): строка «Shipping not specified» (eBay так и пишет, напр.
-    # 375075929359) и карточка без строки доставки вообще — только
-    # «Free local pickup» (самовывоз — не доставка, напр. 298273871260).
-    # Любой другой не-матч — ParseError: неизвестная вёрстка должна греметь.
+    # Доставка ОПЦИОНАЛЬНА (None) в трёх подтверждённых live случаях
+    # (2026-06-10): «Shipping not specified» (напр. 375075929359), карточка
+    # без строки доставки — только «Free local pickup» (самовывоз — не
+    # доставка, 298273871260), и «Freight» (грузовая, суммы на выдаче нет,
+    # 267531699561). Любой другой не-матч — ParseError: вёрстка должна греметь.
     shipping_cost = None
     shipping_matched = False
     rows = [r.get_text(" ", strip=True) for r in card.select(Srp.CARD_ATTR_ROW)]
@@ -97,7 +97,7 @@ def _parse_card(card) -> SrpCard:
             shipping_matched = True
             break
     if not shipping_matched and not any(
-        re.match(r"^(Shipping not specified|Free local pickup)\b", t, re.I)
+        re.match(r"^(Shipping not specified|Free local pickup|Freight)\b", t, re.I)
         for t in rows
     ):
         raise ParseError("shipping_cost", None, item_id, raw_html)
