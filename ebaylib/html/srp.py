@@ -78,17 +78,28 @@ def _parse_card(card) -> SrpCard:
     if not currency_raw:
         raise ParseError("currency", praw, item_id, raw_html)
 
+    # Доставка ОПЦИОНАЛЬНА (None) в двух подтверждённых live случаях
+    # (2026-06-10): строка «Shipping not specified» (eBay так и пишет, напр.
+    # 375075929359) и карточка без строки доставки вообще — только
+    # «Free local pickup» (самовывоз — не доставка, напр. 298273871260).
+    # Любой другой не-матч — ParseError: неизвестная вёрстка должна греметь.
     shipping_cost = None
-    for r in card.select(Srp.CARD_ATTR_ROW):
-        txt = r.get_text(" ", strip=True)
+    shipping_matched = False
+    rows = [r.get_text(" ", strip=True) for r in card.select(Srp.CARD_ATTR_ROW)]
+    for txt in rows:
         if _FREE_RE.match(txt):
             shipping_cost = 0.0
+            shipping_matched = True
             break
         sm = _PAID_RE.match(txt)
         if sm:
             shipping_cost = _to_float(sm.group("amount"))
+            shipping_matched = True
             break
-    if shipping_cost is None:
+    if not shipping_matched and not any(
+        re.match(r"^(Shipping not specified|Free local pickup)\b", t, re.I)
+        for t in rows
+    ):
         raise ParseError("shipping_cost", None, item_id, raw_html)
 
     # Продавца якорим по строке "<ник> NN.N% positive" — единственный

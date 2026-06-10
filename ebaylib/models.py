@@ -2,8 +2,8 @@
 
 Все поля обязательны — при любой нестыковке парсер падает с сырьём наружу,
 а не подставляет None. Опциональны только поля, для которых живьём
-подтверждено легитимное отсутствие: ``location`` и ``condition`` (SRP) и
-``last_updated`` (item).
+подтверждено легитимное отсутствие: ``location``, ``condition`` и
+``shipping_cost`` (SRP), ``last_updated`` (item).
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ class SrpCard:
     condition: str | None      # "new" | "other"; None — карточка без состояния (live-кейс)
     price: float               # сумма в исходной валюте
     currency_raw: str          # валютный токен как на сайте ('$','US $','C $','EUR'…)
-    shipping_cost: float       # исходная валюта; 0.0 = Free («Shipping not specified» → ParseError)
+    shipping_cost: float | None  # исходная валюта; 0.0 = Free; None = «Shipping not specified»/самовывоз
     seller: str
     location: str | None       # из "Located in <...>"; eBay рендерит лениво/не всегда
     image_url: str
@@ -41,7 +41,7 @@ class CatalogItem:
     title: str              # без суффикса "Opens in a new window or tab"
     condition: str | None   # "new" | "other"; None — карточка без состояния
     price: float            # в USD
-    shipping_cost: float    # в USD; 0.0 = Free
+    shipping_cost: float | None  # в USD; 0.0 = Free; None = не указана/самовывоз
     seller: str
     location: str | None    # из "Located in <...>"; None допустим (lazy-рендер)
     image_url: str

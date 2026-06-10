@@ -14,7 +14,7 @@ def _check_items(items):
         assert it.condition in ("new", "other", None), it.condition
         assert it.price > 0, it.price
         assert it.currency_raw, it.item_id  # сырой токен валюты ('$','C $'…)
-        assert it.shipping_cost >= 0.0, it.shipping_cost  # обязателен; 0.0 = Free
+        assert it.shipping_cost is None or it.shipping_cost >= 0.0, it.shipping_cost
         # seller — чистый ник, без рейтинга/счётчиков
         assert it.seller, it.item_id
         assert not it.seller.isdigit(), it.seller
