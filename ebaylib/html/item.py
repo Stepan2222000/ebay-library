@@ -30,6 +30,8 @@ from .selectors import Item as S
 
 
 _AMOUNT = r"[\d,]+(?:\.\d{1,2})?"
+# username продавца — единственное вхождение в embedded-JSON страницы
+_SELLER_USERNAME_RE = re.compile(r'"sellerUserName":"([^"]*)"')
 
 
 def _txt(el) -> str | None:
@@ -103,21 +105,16 @@ def parse_item_page(html: str, description_html: str | None = None) -> ItemPage:
             raise ParseError("shipping_cost", ship_raw, item_number, html)
         shipping_cost = _to_float(sm.group(1))
 
-    # seller — сохраняем username (как в каталоге), не display-name. На странице
-    # видимый текст = витринное имя ("Florida Tool Shed"), а username лежит в
-    # ссылке продавца: _ssn=<username> либо /str/<username> (для магазинов).
-    seller = None
-    for a in soup.select(S.SELLER_LINKS):
-        m = re.search(r"[?&]_ssn=([A-Za-z0-9_.\-]+)", a.get("href", ""))
-        if m:
-            seller = m.group(1)
-            break
-    if not seller:
-        for a in soup.select(S.SELLER_LINKS):
-            m = re.search(r"/str/([A-Za-z0-9_.\-]+)", a.get("href", ""))
-            if m:
-                seller = m.group(1)
-                break
+    # seller — username (как в каталоге), не display-name (видимый текст
+    # карточки — витрина, "Florida Tool Shed"). Единый источник — embedded-JSON
+    # "sellerUserName": ровно одно вхождение и всегда ник владельца листинга.
+    # Проверено live 2026-06-10 на 23 PDP (магазин/без магазина/EU-фикстуры).
+    # Ссылки карточки продавца НЕ годятся: формат зависит от наличия магазина
+    # (_ssn= / /str/ / /sch/<user>/m.html), слаг /str/ может отличаться от
+    # username (avantims ≠ avantimotorsports), а /str/ ловит и ЧУЖИЕ магазины
+    # из рекламных блоков (item 376748192596: /str/gpscity).
+    sm = _SELLER_USERNAME_RE.search(html)
+    seller = sm.group(1) if sm else None
     if not seller:
         raise ParseError("seller", None, item_number, html)
 

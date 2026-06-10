@@ -44,8 +44,7 @@ class Item:
         '[data-ebay-critical-module="SHIPPING_ATF_SECTION_MODULE"] '
         ".ux-labels-values--shipping .ux-labels-values__values-content > div"
     )
-    SELLER_CARD = ".x-sellercard-atf"
-    SELLER_LINKS = ".x-sellercard-atf a[href]"
+    SELLER_CARD = ".x-sellercard-atf"  # якорь готовности; ник — из embedded-JSON "sellerUserName"
     LOCATION_SPANS = "span.ux-textspans--SECONDARY"
     SPECIFICS_DL = "dl.ux-labels-values"
     SPECIFICS_KEY = "dt .ux-textspans"
