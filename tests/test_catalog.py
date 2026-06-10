@@ -11,7 +11,7 @@ def _check_items(items):
     for it in items:
         assert it.item_id.isdigit() and len(it.item_id) == 12, it.item_id
         assert it.title
-        assert it.condition in ("new", "other"), it.condition
+        assert it.condition in ("new", "other", None), it.condition
         assert it.price > 0, it.price
         assert it.currency_raw, it.item_id  # сырой токен валюты ('$','C $'…)
         assert it.shipping_cost >= 0.0, it.shipping_cost  # обязателен; 0.0 = Free

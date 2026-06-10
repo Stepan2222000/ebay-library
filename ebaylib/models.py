@@ -2,7 +2,7 @@
 
 Все поля обязательны — при любой нестыковке парсер падает с сырьём наружу,
 а не подставляет None. Опциональны только поля, для которых живьём
-подтверждено легитимное отсутствие: ``location`` (SRP, lazy-рендер) и
+подтверждено легитимное отсутствие: ``location`` и ``condition`` (SRP) и
 ``last_updated`` (item).
 """
 
@@ -21,7 +21,7 @@ class SrpCard:
 
     item_id: str               # 12 цифр (placeholder "Shop on eBay" отсеян)
     title: str                 # без суффикса "Opens in a new window or tab"
-    condition: str             # нормализованное: "new" | "other"
+    condition: str | None      # "new" | "other"; None — карточка без состояния (live-кейс)
     price: float               # сумма в исходной валюте
     currency_raw: str          # валютный токен как на сайте ('$','US $','C $','EUR'…)
     shipping_cost: float       # исходная валюта; 0.0 = Free («Shipping not specified» → ParseError)
@@ -39,7 +39,7 @@ class CatalogItem:
 
     item_id: str            # 12 цифр
     title: str              # без суффикса "Opens in a new window or tab"
-    condition: str          # нормализованное: "new" | "other"
+    condition: str | None   # "new" | "other"; None — карточка без состояния
     price: float            # в USD
     shipping_cost: float    # в USD; 0.0 = Free
     seller: str

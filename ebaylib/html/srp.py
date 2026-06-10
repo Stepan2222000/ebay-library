@@ -56,16 +56,15 @@ def _parse_card(card) -> SrpCard:
 
     # subtitle первым span'ом может содержать не состояние, а текст
     # совместимости ("Replaces OEMs for Polaris…") — ищем известное состояние
-    # среди всех span'ов, не только первого.
-    condition_raw = None
+    # среди всех span'ов, не только первого. Состояние ОПЦИОНАЛЬНО: у части
+    # карточек eBay не рисует его вовсе (подтверждено live 2026-06-10,
+    # напр. 400448473243 в выдаче '805079') — None, не ошибка.
+    condition = None
     for sp in card.select(Srp.CARD_SUBTITLE_SPANS):
         txt = sp.get_text(strip=True)
         if txt.lower() in KNOWN_CONDITIONS:
-            condition_raw = txt
+            condition = normalize_condition(txt)
             break
-    if condition_raw is None:
-        raise ParseError("condition", None, item_id, raw_html)
-    condition = normalize_condition(condition_raw)
 
     pe = card.select_one(Srp.CARD_PRICE)
     praw = pe.get_text(" ", strip=True) if pe else None
