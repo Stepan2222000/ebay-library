@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from ebay_library import ParseError, parse_item_page
+from ebay_library import ParseError, parse_item_page, ship_to_location
 
 FIX = Path(__file__).parent / "fixtures"
 
@@ -64,8 +64,24 @@ def test_not_item_raises():
         raise AssertionError("expected ParseError")
 
 
+def test_ship_to_location():
+    # фикстуры сняты с EU-сессий — локации там EU-форматов (не "{zip},USA");
+    # извлечение поля от формата не зависит.
+    html = (FIX / "item_277574984378.html").read_text(encoding="utf-8", errors="replace")
+    assert ship_to_location(html) == "00-001", ship_to_location(html)
+    html = (FIX / "item_116709108878.html").read_text(encoding="utf-8", errors="replace")
+    assert ship_to_location(html) == "8000", ship_to_location(html)
+    try:
+        ship_to_location("<html><body>nope</body></html>")
+    except ParseError:
+        pass
+    else:
+        raise AssertionError("expected ParseError")
+
+
 if __name__ == "__main__":
     test_items()
     test_description_from_iframe_html()
     test_not_item_raises()
+    test_ship_to_location()
     print("PASS")

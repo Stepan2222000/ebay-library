@@ -12,6 +12,7 @@ from .parsing.catalog import parse_search_page
 from .parsing.item import parse_item_page
 from .parsing.models import Catalog, CatalogBatch, CatalogItem, ItemPage, SearchPage, SrpCard
 from .parsing.page_state import Antibot, PageKind, classify, detect_antibot, detect_state
+from .parsing.zipstate import ship_to_location
 from .worker.fetch import fetch_catalog, fetch_catalogs, fetch_item, warmup
 from .worker.navigation import wait_until_ready
 
@@ -25,6 +26,7 @@ __all__ = [
     "SrpCard", "CatalogItem", "SearchPage", "Catalog", "CatalogBatch", "ItemPage",
     # Слой 1 — чистый парсинг
     "parse_search_page", "parse_item_page",
+    "ship_to_location",
     "PageKind", "Antibot", "classify", "detect_antibot", "detect_state",
     # Слой 2 — методы воркера
     "warmup", "fetch_item", "fetch_catalog", "fetch_catalogs",

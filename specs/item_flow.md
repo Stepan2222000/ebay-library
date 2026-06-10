@@ -20,10 +20,12 @@ parse_item_page(main_html, description_html=None) -> ItemPage
 - `description_html` — `frame.content()` iframe-фрейма: передан → извлекаем
   текст (bs4, без script/style, `\n`-разделитель), не передан → `description=""`.
 
-Браузер грузит iframe сам при открытии страницы (доп. запросов не нужно), но
-документ фрейма появляется не сразу: сначала `about:blank`, затем реальный
-`ebaydesc.com`. Добыча (`worker/fetch.py::_description_html`): ждать фрейм с этим
-host + `domcontentloaded` (до 15с), нет → TimeoutError (фатально).
+Документ фрейма **ленивый**: eBay начинает грузить его только при попадании
+iframe во viewport (подтверждено live: без скролла не грузится вовсе), и
+появляется он не сразу — сначала `about:blank`, затем реальный `ebaydesc.com`.
+Добыча (`worker/fetch.py::_description_html`): скролл к `#desc_ifr`, затем
+ждать фрейм с этим host + `domcontentloaded` (до 15с), нет → TimeoutError
+(фатально).
 
 ## Правила полей
 
@@ -52,10 +54,46 @@ host + `domcontentloaded` (до 15с), нет → TimeoutError (фатально
   «Located in:» по SECONDARY-span — контейнер бывает разный:
   `--shipping` / `--legalShipping`).
 
+## ZIP доставки — сессионная локация (обязательна)
+
+Без ship-to локации eBay берёт её по **IP-гео**: доставка либо не считается
+(«May not ship to <страна>», Delivery: Varies — не-US IP), либо тихо считается
+под чужой индекс (US-IP). Оба исхода неприемлемы, поэтому `zip` у `fetch_item`
+обязателен (без дефолта; рекомендация — `"19701"`, единый с каталогом).
+
+Механика (всё подтверждено live, июнь 2026):
+
+- Локация **контекст-wide** (одна на сессию), живёт на стороне eBay; на
+  `/itm/` URL-параметр `_stpos` **игнорируется** — поставить ZIP per-URL
+  нельзя.
+- **Сеттер — визит SRP с `_stpos={zip}`** (тот же механизм, что у каталога):
+  после него все item сессии наследуют ZIP. `_nkw` = сам item_id; даже
+  «0 results» выставляет ZIP. Прямой GET `itemmodules?…GET_RATES_MODAL…`
+  (запрос кнопки Update модалки) отвергнут: в свежей сессии персистится
+  ~50/50 (зависит от непройденного фонового antibot-challenge). UI-модалка —
+  лишняя хрупкая автоматизация. Кука `nonsession` тоже несёт локацию
+  (base64 с битовым сдвигом, внутри `{zip},USA`), но подписана (самодельное
+  значение eBay отвергает целиком) и пишется **лениво** (~5с после страницы) —
+  как сигнал «выставлено» в плотном цикле непригодна, в коде не используется.
+- **Истина — сама страница**: единственный `"shipToLocation"` в HTML
+  (после установки — `"{zip},USA"`, URL-encoded; без — IP-гео локация,
+  напр. `"CV470AL"`). Извлекает `parsing/zipstate.py::ship_to_location`.
+
+Поток оптимистичный: товар грузится сразу, локация сверяется по его же HTML;
+мискматч → один setter-SRP → повторный заход; повторный мискматч →
+`ParseError("ship_to_location")`. Стационарно — ноль лишних навигаций,
+setter срабатывает один раз на сессию (замерено: 3 товара = 1 setter).
+
+Товар **не доставляется в US** (intl-листинги): обязательные блоки страницы
+отсутствуют → громкая ошибка (ParseError/TimeoutError якорей) — валидного
+результата «без доставки» нет, доставка обязательна.
+
 ## Добыча (`fetch_item`)
 
 ```
-goto /itm/{id} → wait_until_ready(ITEM) → main_html → description_html → parse
+fetch_item(page, item_id, *, zip)
+goto /itm/{id} → wait_until_ready(ITEM) → main_html → ship_to_location ==
+"{zip},USA"? (нет → setter-SRP → повторно) → description_html → parse
 ```
 
 Готовность ITEM включает `iframe#desc_ifr` как якорь (тег в DOM), но загрузку

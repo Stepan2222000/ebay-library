@@ -37,14 +37,18 @@ async with async_playwright() as p:
     )
     print(len(batch.items), "карточек,", len(batch.errors), "ошибок")
 
-    item = await fetch_item(page, "277574984378")
+    item = await fetch_item(page, "277574984378", zip="19701")
     print(item.title, item.price_usd, item.seller)
 
     photos = await fetch_images(item.image_urls)         # list[bytes], порядок сохранён
 ```
 
-Фильтры опциональны (по умолчанию не добавляются), но `zip` на практике нужен:
-без него часть карточек рендерится без доставки и парсер падает.
+Фильтры каталога опциональны (по умолчанию не добавляются), но `zip` на
+практике нужен: без него часть карточек рендерится без доставки и парсер
+падает. У `fetch_item` `zip` **обязателен**: локация item-страниц сессионная
+(URL-параметр на `/itm/` не работает) — библиотека ставит её сама одним
+setter-визитом SRP на сессию и сверяет `shipToLocation` на каждом товаре
+(см. [item_flow](specs/item_flow.md)).
 
 ### Валюта → USD
 

@@ -13,11 +13,13 @@ from __future__ import annotations
 import asyncio
 
 from ..config import ITEMS_PER_PAGE, build_search_url
+from ..errors import ParseError
 from ..fx import convert_cards
 from ..parsing.catalog import parse_search_page
 from ..parsing.item import parse_item_page
 from ..parsing.models import Catalog, CatalogBatch, CatalogItem, ItemPage, SrpCard
 from ..parsing.page_state import PageKind
+from ..parsing.zipstate import ship_to_location
 from .navigation import wait_until_ready
 
 _HOME_URL = "https://www.ebay.com/"
@@ -36,9 +38,11 @@ async def warmup(page) -> None:
 
 async def _description_html(page, timeout_s: float) -> str:
     """HTML iframe-описания. Тег #desc_ifr уже в DOM (гарантировано готовностью),
-    но документ фрейма грузится отдельно: сначала about:blank, затем реальный
-    ebaydesc.com. Ждём фрейм с этим host + domcontentloaded. Нет за таймаут →
-    фатально (TimeoutError), как договорено."""
+    но документ фрейма ЛЕНИВЫЙ — eBay начинает грузить его только при попадании
+    iframe во viewport (подтверждено live: без скролла не грузится вовсе), поэтому
+    сперва скроллим к нему. Затем ждём фрейм с host ebaydesc.com + domcontentloaded.
+    Нет за таймаут → фатально (TimeoutError), как договорено."""
+    await page.locator("#desc_ifr").scroll_into_view_if_needed()
     loop = asyncio.get_event_loop()
     deadline = loop.time() + timeout_s
     while loop.time() < deadline:
@@ -52,15 +56,40 @@ async def _description_html(page, timeout_s: float) -> str:
     raise TimeoutError(f"description iframe not loaded at {page.url}")
 
 
-async def fetch_item(page, item_id: str, desc_timeout_s: float = DESC_TIMEOUT_S) -> ItemPage:
+async def fetch_item(
+    page, item_id: str, *, zip: str, desc_timeout_s: float = DESC_TIMEOUT_S
+) -> ItemPage:
     """Открывает страницу товара на ``page``, дожидается готовности, собирает
     основной HTML + HTML iframe-описания и парсит в ItemPage.
 
+    ``zip`` обязателен: без ship-to локации eBay считает её по IP-гео и
+    доставка либо не считается вовсе, либо тихо считается под чужой индекс
+    (на ``/itm/`` URL-параметр ``_stpos`` игнорируется). Локация сессионная,
+    ставится тем же механизмом, что у каталога, — визитом SRP с ``_stpos``.
+
+    Поток оптимистичный: сразу идём на товар и сверяем ``shipToLocation`` в
+    HTML. Не наш ZIP (старт сессии / кто-то сменил) → один setter-визит SRP
+    (``_nkw`` = сам item_id, ``_stpos={zip}``; даже «0 results» выставляет ZIP
+    на всю сессию — подтверждено live) → повторный заход; повторный мискматч →
+    ParseError. Стационарно (ZIP уже стоит) — ноль лишних действий на item;
+    кука ``nonsession`` для проверки не годится: eBay пишет в неё ZIP лениво
+    (~5 c после страницы), см. specs/item_flow.md.
+
     Бросает AccessDeniedError / ErrorPageError / TimeoutError (готовность),
-    TimeoutError (iframe), ParseError (поля)."""
-    await page.goto(_ITEM_URL.format(item_id=item_id), wait_until="domcontentloaded")
-    await wait_until_ready(page, PageKind.ITEM)
-    main_html = await page.content()
+    TimeoutError (iframe), ParseError (поля; в т.ч. ship_to_location ≠
+    ожидаемому после установки)."""
+    expected = f"{zip},USA"
+    for is_retry in (False, True):
+        await page.goto(_ITEM_URL.format(item_id=item_id), wait_until="domcontentloaded")
+        await wait_until_ready(page, PageKind.ITEM)
+        main_html = await page.content()
+        actual = ship_to_location(main_html)
+        if actual == expected:
+            break
+        if is_retry:
+            raise ParseError("ship_to_location", actual, item_id, main_html)
+        await page.goto(build_search_url(item_id, page=1, zip=zip), wait_until="domcontentloaded")
+        await wait_until_ready(page, PageKind.SRP)
     description_html = await _description_html(page, desc_timeout_s)
     return parse_item_page(main_html, description_html)
 
