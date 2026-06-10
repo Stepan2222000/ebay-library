@@ -32,6 +32,8 @@ from .selectors import Item as S
 _AMOUNT = r"[\d,]+(?:\.\d{1,2})?"
 # username продавца — единственное вхождение в embedded-JSON страницы
 _SELLER_USERNAME_RE = re.compile(r'"sellerUserName":"([^"]*)"')
+# токен размера в URL фото CDN (…/g/<id>/s-l500.webp) — нормализуем к s-l1600
+_SIZE_TOKEN_RE = re.compile(r"s-l\d+")
 
 
 def _txt(el) -> str | None:
@@ -138,12 +140,20 @@ def parse_item_page(html: str, description_html: str | None = None) -> ItemPage:
     if not specifics:
         raise ParseError("specifics", None, item_number, html)
 
-    # Галерея: full-size URL'ы (data-zoom-src). eBay дублирует каждое фото в
-    # карусели — дедупим, сохраняя порядок.
+    # Галерея: большие версии фото. Единый способ: URL каждой картинки карусели
+    # (src; у ленивых картинок src нет — URL в data-src) + замена токена размера
+    # на s-l1600 — CDN всегда отдаёт максимум существующего (клампит к
+    # оригиналу, не 404). От data-zoom-src не зависим: у части листингов он
+    # ПУСТОЙ (большой версии нет физически; live 2026-06-10, напр. 125943066590
+    # — оригинал 500px). Проверено на 10 страницах: те же фото в том же порядке,
+    # что давал data-zoom-src. eBay дублирует фото в карусели — дедуп.
     image_urls: list[str] = []
-    for img in soup.select(S.IMAGE_ZOOM):
-        url = img.get("data-zoom-src")
-        if url and url not in image_urls:
+    for img in soup.select(S.IMAGE_CAROUSEL):
+        raw = img.get("src") or img.get("data-src")
+        if not raw:
+            continue
+        url = _SIZE_TOKEN_RE.sub("s-l1600", raw)
+        if url not in image_urls:
             image_urls.append(url)
     if not image_urls:
         raise ParseError("image_urls", None, item_number, html)
