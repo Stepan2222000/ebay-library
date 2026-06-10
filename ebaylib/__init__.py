@@ -8,6 +8,8 @@
 - ``browser/`` — Слой 2: живой Playwright (готовность, ``EbaySession``).
 """
 
+from .browser.readiness import wait_until_ready
+from .browser.session import EbaySession
 from .errors import AccessDeniedError, ErrorPageError, ParseError
 from .html.item import parse_item_page, ship_to_location
 from .html.page_state import Antibot, PageKind, classify, detect_antibot, detect_state
@@ -29,6 +31,9 @@ __all__ = [
     "parse_search_page", "parse_item_page",
     "ship_to_location",
     "PageKind", "Antibot", "classify", "detect_antibot", "detect_state",
+    # Слой 2 — сессия воркера (живой Playwright)
+    "EbaySession",
+    "wait_until_ready",
     # конвертация валют в USD (fx-эндпоинт)
     "convert_cards",
     # скачивание фото (HTTP-IO, без браузера)
