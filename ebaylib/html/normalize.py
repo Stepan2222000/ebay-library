@@ -9,6 +9,9 @@ from __future__ import annotations
 # Состояния, нормализуемые в "new". Остальные известные → "other".
 NEW_CONDITIONS = {
     "brand new", "new", "new (other)", "new other (see details)", "open box",
+    # PDP пишет open box и с тире — en dash и дефис (live 2026-06-10,
+    # напр. item 126706684824: "New – Open box")
+    "new – open box", "new - open box",
 }
 # Все известные значения состояния. Нужны, чтобы (в каталоге) найти нужный span
 # среди нескольких — первым там может стоять текст совместимости, а не состояние.
