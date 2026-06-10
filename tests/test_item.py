@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from ebay_library import ParseError, parse_item_page, ship_to_location
+from ebaylib import ParseError, parse_item_page, ship_to_location
 
 FIX = Path(__file__).parent / "fixtures"
 

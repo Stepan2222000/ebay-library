@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from ebay_library import ParseError, parse_search_page
+from ebaylib import ParseError, parse_search_page
 
 FIX = Path(__file__).parent / "fixtures"
 
@@ -14,7 +14,7 @@ def _check_items(items):
         assert it.condition in ("new", "other"), it.condition
         assert it.price > 0, it.price
         assert it.currency_raw, it.item_id  # сырой токен валюты ('$','C $'…)
-        assert it.shipping_cost is None or it.shipping_cost >= 0.0, it.shipping_cost
+        assert it.shipping_cost >= 0.0, it.shipping_cost  # обязателен; 0.0 = Free
         # seller — чистый ник, без рейтинга/счётчиков
         assert it.seller, it.item_id
         assert not it.seller.isdigit(), it.seller
@@ -77,7 +77,7 @@ def test_convert_cards_live():
     # значит price_usd == price native до цента.
     import asyncio
 
-    from ebay_library import convert_cards
+    from ebaylib import convert_cards
 
     html = (FIX / "srp_8M6000623_enUS.html").read_text(encoding="utf-8", errors="replace")
     cards = parse_search_page(html).items
