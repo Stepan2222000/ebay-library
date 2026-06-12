@@ -8,6 +8,7 @@ version = "0.0.1"
 description = "eBay parsing library — методы парсинга каталога и карточек для воркеров"
 requires-python = ">=3.11"
 dependencies = [
+    "asyncpg",
     "beautifulsoup4",
     "httpx",
     "playwright",
