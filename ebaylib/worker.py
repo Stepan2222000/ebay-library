@@ -5,6 +5,9 @@
 завершение; если задач пока нет — просто ждёт внутри) и ``store`` (клиент
 записи в ebay_data). Опционально ``task_done(task, stats)`` — подтверждение,
 вызывается строго ПОСЛЕ записи результата в БД: задача обработана = записана.
+``stats = {"db": …, "timing": {"started_at", "parse_ms", "write_ms",
+"total_ms"}}`` — статистика записи из БД + тайминги этапов (замеряет
+библиотека).
 
 Формат задачи (всё вне ``params`` — метаданные оркестратора, библиотека их
 не читает и возвращает в ``task_done`` как есть):
@@ -36,6 +39,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import suppress
+from datetime import datetime, timezone
 
 from .browser.session import PAGE_DELAY_S, EbaySession
 from .store import Store
@@ -94,23 +98,34 @@ async def _dispatch(session: EbaySession, task: dict):
     raise TaskFormatError(f"unknown task type {kind!r}")
 
 
-async def _write_result(store: Store, task_done, task: dict, result) -> None:
+async def _write_result(store: Store, task_done, task: dict, result, timing: dict) -> None:
     """Запись результата задачи в БД, затем подтверждение ``task_done``.
 
     Каталог: по вызову ``apply_catalog`` на каждый артикул (транзакция на
-    артикул; повторная запись после переотдачи идемпотентна), stats — словарь
-    «артикул → статистика БД». Item: ``apply_item``, stats — статистика БД."""
+    артикул; повторная запись после переотдачи идемпотентна), ``db`` — словарь
+    «артикул → статистика БД». Item: ``apply_item``, ``db`` — статистика БД.
+
+    В ``task_done`` уходит ``{"db": …, "timing": …}``: ``timing`` несёт
+    ``started_at`` (wall-clock ISO взятия задачи), ``parse_ms`` (длительность
+    парсинга), ``write_ms`` (длительность записи) и ``total_ms`` (старт →
+    конец записи, включая ожидание в очереди)."""
+    loop = asyncio.get_event_loop()
     params = task["params"]
+    t_w0 = loop.time()
     if task["type"] == "catalog":
-        stats = {}
+        db = {}
         for article, cat in result.per_query.items():
-            stats[article] = await store.apply_catalog(
+            db[article] = await store.apply_catalog(
                 article, cat,
                 zip=params["zip"], condition=params.get("condition"),
                 min_price=params.get("min_price"), max_price=params.get("max_price"),
             )
     else:
-        stats = await store.apply_item(result, zip=params["zip"])
+        db = await store.apply_item(result, zip=params["zip"])
+    t_w1 = loop.time()
+    timing["write_ms"] = round((t_w1 - t_w0) * 1000)
+    timing["total_ms"] = round((t_w1 - timing.pop("_t_start")) * 1000)
+    stats = {"db": db, "timing": timing}
     logger.debug("written %s: %.200s", task.get("type"), stats)
     if task_done is not None:
         await task_done(task, stats)
@@ -133,15 +148,16 @@ async def run_worker(
     страниц при блокировках — внутри сессии, незаметно для цикла."""
     session = EbaySession(get_page, page_delay_s=page_delay_s)
     queue: asyncio.Queue = asyncio.Queue(maxsize=QUEUE_SIZE)
+    loop = asyncio.get_event_loop()
 
     async def writer() -> None:
         while True:
             got = await queue.get()
             if got is _STOP:
                 return
-            task, result = got
+            task, result, timing = got
             try:
-                await _write_result(store, task_done, task, result)
+                await _write_result(store, task_done, task, result, timing)
             except BaseException as e:
                 _blame(e, task, "write failed")
                 raise
@@ -181,8 +197,12 @@ async def run_worker(
                     logger.debug("next_task -> None, finishing")
                     break
                 logger.debug("task: %.200s", task)
+                started_at = datetime.now(timezone.utc).isoformat()
+                t_start = loop.time()
                 result = await race(_dispatch(session, task))
-                await race(queue.put((task, result)))
+                timing = {"started_at": started_at, "_t_start": t_start,
+                          "parse_ms": round((loop.time() - t_start) * 1000)}
+                await race(queue.put((task, result, timing)))
         except BaseException as e:
             # Виновница в лог и на исключение (если её ещё не назвал писатель;
             # сбой next_task — задачи нет, только лог типа ошибки).

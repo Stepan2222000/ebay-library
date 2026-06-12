@@ -80,11 +80,17 @@ def test_happy_flow():
     assert [c[0] for c in store.calls] == ["catalog", "item"], store.calls
     assert store.calls[0][1] == "8M0142836" and store.calls[0][2] == 10
     assert store.calls[1][1] == "277574984378"
-    # task_done: после записи, со статистикой; каталог — словарь по артикулам
+    # task_done: после записи; stats = {"db": …, "timing": …}; каталог — db по артикулам
     assert [d[0] for d in done] == [1, 2]
-    assert done[0][1] == {"8M0142836": {"fetch_id": 1, "items_total": 10}}, done[0]
+    assert done[0][1]["db"] == {"8M0142836": {"fetch_id": 1, "items_total": 10}}, done[0]
     assert done[0][2] >= 1 and done[1][2] == 2, done
-    assert done[1][1]["item_id"] == 277574984378
+    assert done[1][1]["db"]["item_id"] == 277574984378
+    # тайминги: started_at (ISO), parse_ms/write_ms/total_ms (int), без _t_start
+    tm = done[0][1]["timing"]
+    assert set(tm) == {"started_at", "parse_ms", "write_ms", "total_ms"}, tm
+    assert "T" in tm["started_at"] and all(isinstance(tm[k], int) for k in
+           ("parse_ms", "write_ms", "total_ms"))
+    assert tm["total_ms"] >= tm["write_ms"] >= 0
     assert store.closed
 
 

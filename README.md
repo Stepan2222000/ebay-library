@@ -37,6 +37,8 @@ async def main():
         return await my_queue.take()      # None → штатное завершение
 
     async def task_done(task, stats):     # строго ПОСЛЕ записи в БД
+        # stats = {"db": <статистика записи>,
+        #          "timing": {"started_at", "parse_ms", "write_ms", "total_ms"}}
         await my_queue.ack(task, stats)
 
     await run_worker(get_page, next_task, Store(), task_done=task_done)
