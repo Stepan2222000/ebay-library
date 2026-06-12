@@ -93,14 +93,20 @@ def parse_item_page(html: str, description_html: str | None = None) -> ItemPage:
     price_usd = _to_float(pm.group(0))
 
     # Доставка в USD: Free → 0.0; intl → "(approx US $X)"; US → "US $X" в начале.
-    # Продавец не настроил доставку до ZIP — суммы на странице нет, eBay пишет
-    # "Will ship to United States. Read item description or contact seller for
-    # shipping options" (live 2026-06-10, напр. 174601590686) → None.
+    # shipping_cost = None («доставки нет/неизвестна») в двух живых случаях:
+    #  - продавец не настроил доставку до ZIP: суммы нет, eBay пишет "Will ship
+    #    to United States. Read item description or contact seller for shipping
+    #    options" (live 2026-06-10, напр. 174601590686);
+    #  - pickup-only: строки доставки нет вовсе, есть строка самовывоза
+    #    «Pickup: Local pickup only from …» (live 2026-06-12, напр. 121427597766).
     # Прочие непарсящиеся форматы — по-прежнему ParseError.
     ship_raw = _txt(soup.select_one(S.SHIPPING))
     if not ship_raw:
-        raise ParseError("shipping_cost", None, item_number, html)
-    if re.match(r"^Free\b", ship_raw, re.I):
+        if _txt(soup.select_one(S.SHIPPING_PICKUP)):
+            shipping_cost = None   # только самовывоз — доставки не существует
+        else:
+            raise ParseError("shipping_cost", None, item_number, html)
+    elif re.match(r"^Free\b", ship_raw, re.I):
         shipping_cost = 0.0
     elif "contact seller" in ship_raw.lower():
         shipping_cost = None
@@ -133,6 +139,15 @@ def parse_item_page(html: str, description_html: str | None = None) -> ItemPage:
         if t.startswith("Located in:"):
             location = t[len("Located in:"):].strip()
             break
+    if not location:
+        # на pickup-only страницах строки "Located in:" нет вовсе — локация
+        # внутри pickup-строки: «Local pickup only from Milwaukee, Wisconsin,
+        # United States 53209» (live 2026-06-12, 121427597766)
+        pickup_raw = _txt(soup.select_one(S.SHIPPING_PICKUP))
+        if pickup_raw:
+            pm = re.search(r"\bfrom\s+(.+)$", pickup_raw)
+            if pm:
+                location = pm.group(1).strip()
     if not location:
         raise ParseError("location", None, item_number, html)
 

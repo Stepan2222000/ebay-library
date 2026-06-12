@@ -44,6 +44,20 @@ def test_items():
         assert (it.last_updated is None) == lu_none, (num, it.last_updated)
 
 
+def test_pickup_only_listing():
+    # pickup-only (live 2026-06-12): строки --shipping нет, есть --localPickup
+    # («Pickup: Local pickup only from …») → shipping_cost=None («доставки нет»);
+    # "Located in:" тоже нет — локация берётся из pickup-строки (после "from").
+    html = (FIX / "item_121427597766_pickup.html").read_text(encoding="utf-8", errors="replace")
+    it = parse_item_page(html)
+    _check(it)
+    assert it.shipping_cost is None, it.shipping_cost
+    assert it.seller == "alecotooling", it.seller
+    assert it.condition == "other", it.condition
+    assert it.price_usd == 1200.00, it.price_usd
+    assert it.location == "Milwaukee, Wisconsin, United States 53209", it.location
+
+
 def test_description_from_iframe_html():
     main = (FIX / "item_277574984378.html").read_text(encoding="utf-8", errors="replace")
     # без второго аргумента — описание пустое
@@ -82,6 +96,7 @@ def test_ship_to_location():
 
 if __name__ == "__main__":
     test_items()
+    test_pickup_only_listing()
     test_description_from_iframe_html()
     test_not_item_raises()
     test_ship_to_location()

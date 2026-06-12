@@ -44,6 +44,16 @@ class Item:
         '[data-ebay-critical-module="SHIPPING_ATF_SECTION_MODULE"] '
         ".ux-labels-values--shipping .ux-labels-values__values-content > div"
     )
+    # pickup-only листинги: строки --shipping нет вовсе, вместо неё
+    # --localPickup («Pickup: Local pickup only from …») — доставки не
+    # существует, парсер ставит shipping_cost=None (live 2026-06-12,
+    # напр. 121427597766, промышленный клапан $1200)
+    SHIPPING_PICKUP = (
+        '[data-ebay-critical-module="SHIPPING_ATF_SECTION_MODULE"] '
+        ".ux-labels-values--localPickup .ux-labels-values__values-content > div"
+    )
+    # якорь готовности: страница обязана иметь ЛИБО доставку, ЛИБО самовывоз
+    SHIPPING_OR_PICKUP = f"{SHIPPING}, {SHIPPING_PICKUP}"
     SELLER_CARD = ".x-sellercard-atf"  # якорь готовности; ник — из embedded-JSON "sellerUserName"
     LOCATION_SPANS = "span.ux-textspans--SECONDARY"
     SPECIFICS_DL = "dl.ux-labels-values"

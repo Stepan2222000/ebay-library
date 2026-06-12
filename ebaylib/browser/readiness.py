@@ -41,7 +41,7 @@ READY_ANCHORS: dict[PageKind, tuple[str, ...]] = {
         Item.ITEM_NUMBER,
         Item.PRICE_PRIMARY,
         Item.CONDITION,
-        Item.SHIPPING,
+        Item.SHIPPING_OR_PICKUP,
         Item.SELLER_CARD,
         Item.SPECIFICS_DL,
         Item.IMAGE_CAROUSEL,
