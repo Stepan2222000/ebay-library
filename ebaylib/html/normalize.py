@@ -12,6 +12,10 @@ NEW_CONDITIONS = {
     # PDP пишет open box и с тире — en dash и дефис (live 2026-06-10,
     # напр. item 126706684824: "New – Open box")
     "new – open box", "new - open box",
+    # официальная линейка eBay для одежды (tags/defects) и обуви (box/
+    # imperfections); live 2026-06-12, напр. item 115851272608 "New with tags"
+    "new with tags", "new without tags", "new with defects",
+    "new with box", "new without box", "new with imperfections",
 }
 # Все известные значения состояния. Нужны, чтобы (в каталоге) найти нужный span
 # среди нескольких — первым там может стоять текст совместимости, а не состояние.
