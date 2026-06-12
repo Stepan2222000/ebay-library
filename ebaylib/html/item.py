@@ -73,10 +73,16 @@ def parse_item_page(html: str, description_html: str | None = None) -> ItemPage:
     if not title:
         raise ParseError("title", None, item_number, html)
 
+    # Состояние: продавец может его не указать — eBay рендерит прочерк
+    # "-- not specified" (live 2026-06-12, напр. 324023434393, марки) → None.
+    # Любая другая незнакомая строка — по-прежнему ParseError.
     condition_raw = _txt(soup.select_one(S.CONDITION))
-    condition = normalize_condition(condition_raw) if condition_raw else None
-    if not condition:
-        raise ParseError("condition", condition_raw, item_number, html)
+    if condition_raw == "--":
+        condition = None
+    else:
+        condition = normalize_condition(condition_raw) if condition_raw else None
+        if not condition:
+            raise ParseError("condition", condition_raw, item_number, html)
 
     # Цена в USD: на intl-листинге берём "Approximately US $X" (.x-price-approx),
     # на US-листинге его нет — берём прямой child .x-price-primary. Суффикс /ea
@@ -93,19 +99,18 @@ def parse_item_page(html: str, description_html: str | None = None) -> ItemPage:
     price_usd = _to_float(pm.group(0))
 
     # Доставка в USD: Free → 0.0; intl → "(approx US $X)"; US → "US $X" в начале.
-    # shipping_cost = None («доставки нет/неизвестна») в двух живых случаях:
-    #  - продавец не настроил доставку до ZIP: суммы нет, eBay пишет "Will ship
-    #    to United States. Read item description or contact seller for shipping
-    #    options" (live 2026-06-10, напр. 174601590686);
-    #  - pickup-only: строки доставки нет вовсе, есть строка самовывоза
-    #    «Pickup: Local pickup only from …» (live 2026-06-12, напр. 121427597766).
+    # Продавец не настроил доставку до ZIP — суммы на странице нет, eBay пишет
+    # "Will ship to United States. Read item description or contact seller for
+    # shipping options" (live 2026-06-10, напр. 174601590686) → None.
     # Прочие непарсящиеся форматы — по-прежнему ParseError.
     ship_raw = _txt(soup.select_one(S.SHIPPING))
     if not ship_raw:
-        if _txt(soup.select_one(S.SHIPPING_PICKUP)):
-            shipping_cost = None   # только самовывоз — доставки не существует
-        else:
+        # Строки доставки нет. Самовывоз: вместо неё строка "Pickup: Local
+        # pickup only from <город>" (live 2026-06-12, напр. 121427597766) →
+        # доставки нет, None. Нет и pickup-строки → страница битая, ParseError.
+        if soup.select_one(S.PICKUP) is None:
             raise ParseError("shipping_cost", None, item_number, html)
+        shipping_cost = None
     elif re.match(r"^Free\b", ship_raw, re.I):
         shipping_cost = 0.0
     elif "contact seller" in ship_raw.lower():
@@ -140,14 +145,14 @@ def parse_item_page(html: str, description_html: str | None = None) -> ItemPage:
             location = t[len("Located in:"):].strip()
             break
     if not location:
-        # на pickup-only страницах строки "Located in:" нет вовсе — локация
-        # внутри pickup-строки: «Local pickup only from Milwaukee, Wisconsin,
-        # United States 53209» (live 2026-06-12, 121427597766)
-        pickup_raw = _txt(soup.select_one(S.SHIPPING_PICKUP))
-        if pickup_raw:
-            pm = re.search(r"\bfrom\s+(.+)$", pickup_raw)
-            if pm:
-                location = pm.group(1).strip()
+        # На pickup-странице «Located in:» нет вовсе — локация в самой
+        # pickup-строке: "Local pickup only from Milwaukee, Wisconsin,
+        # United States 53209" (live 2026-06-12, напр. 121427597766).
+        pickup_txt = _txt(soup.select_one(S.PICKUP))
+        if pickup_txt:
+            pm_loc = re.search(r"\bfrom\s+(.+)$", pickup_txt)
+            if pm_loc:
+                location = pm_loc.group(1).strip()
     if not location:
         raise ParseError("location", None, item_number, html)
 

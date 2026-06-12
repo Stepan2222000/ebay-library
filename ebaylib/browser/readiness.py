@@ -41,7 +41,9 @@ READY_ANCHORS: dict[PageKind, tuple[str, ...]] = {
         Item.ITEM_NUMBER,
         Item.PRICE_PRIMARY,
         Item.CONDITION,
-        Item.SHIPPING_OR_PICKUP,
+        # блок «Shipping…» содержит ЛИБО строку доставки, ЛИБО самовывоз —
+        # ждём любую (CSS-альтернатива через запятую)
+        f"{Item.SHIPPING}, {Item.PICKUP}",
         Item.SELLER_CARD,
         Item.SPECIFICS_DL,
         Item.IMAGE_CAROUSEL,

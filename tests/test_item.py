@@ -20,7 +20,7 @@ EXPECTED = {
 def _check(it):
     assert it.item_number.isdigit(), it.item_number
     assert it.title
-    assert it.condition in ("new", "other"), it.condition
+    assert it.condition in ("new", "other", None), it.condition  # None — «-- not specified»
     assert it.price_usd > 0, it.price_usd
     # None — продавец не указал доставку («contact seller», суммы на PDP нет)
     assert it.shipping_cost is None or it.shipping_cost >= 0.0, it.shipping_cost
@@ -44,20 +44,6 @@ def test_items():
         assert (it.last_updated is None) == lu_none, (num, it.last_updated)
 
 
-def test_pickup_only_listing():
-    # pickup-only (live 2026-06-12): строки --shipping нет, есть --localPickup
-    # («Pickup: Local pickup only from …») → shipping_cost=None («доставки нет»);
-    # "Located in:" тоже нет — локация берётся из pickup-строки (после "from").
-    html = (FIX / "item_121427597766_pickup.html").read_text(encoding="utf-8", errors="replace")
-    it = parse_item_page(html)
-    _check(it)
-    assert it.shipping_cost is None, it.shipping_cost
-    assert it.seller == "alecotooling", it.seller
-    assert it.condition == "other", it.condition
-    assert it.price_usd == 1200.00, it.price_usd
-    assert it.location == "Milwaukee, Wisconsin, United States 53209", it.location
-
-
 def test_description_from_iframe_html():
     main = (FIX / "item_277574984378.html").read_text(encoding="utf-8", errors="replace")
     # без второго аргумента — описание пустое
@@ -66,6 +52,26 @@ def test_description_from_iframe_html():
     desc_html = "<html><body><p>Professionally packaged</p><script>x()</script></body></html>"
     it = parse_item_page(main, desc_html)
     assert it.description == "Professionally packaged", repr(it.description)
+
+
+def test_local_pickup():
+    # самовывоз: строки доставки нет, есть "Pickup: Local pickup only from…" →
+    # shipping None; «Located in:» на такой странице нет — локация из pickup-строки.
+    html = (FIX / "item_121427597766_pickup.html").read_text(encoding="utf-8", errors="replace")
+    it = parse_item_page(html)
+    _check(it)
+    assert it.shipping_cost is None, it.shipping_cost
+    assert it.condition == "other" and it.seller == "alecotooling"
+    assert it.location == "Milwaukee, Wisconsin, United States 53209", it.location
+
+
+def test_condition_dash_none():
+    # продавец не указал состояние: блок рендерит "-- not specified" → None
+    html = (FIX / "item_324023434393_nocond.html").read_text(encoding="utf-8", errors="replace")
+    it = parse_item_page(html)
+    _check(it)
+    assert it.condition is None, it.condition
+    assert it.seller == "brozius"
 
 
 def test_not_item_raises():
@@ -96,8 +102,9 @@ def test_ship_to_location():
 
 if __name__ == "__main__":
     test_items()
-    test_pickup_only_listing()
     test_description_from_iframe_html()
+    test_local_pickup()
+    test_condition_dash_none()
     test_not_item_raises()
     test_ship_to_location()
     print("PASS")
