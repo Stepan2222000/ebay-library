@@ -79,6 +79,16 @@ class CatalogResult:
 
 
 @dataclass(frozen=True, slots=True)
+class ItemEnded:
+    """Листинг завершён (бейдж ENDED на странице товара) — железное «товара
+    нет». Не ``ItemPage``: данных листинга нет (цена/доставка/specifics
+    отсутствуют), несём только id. Пишется в БД как смерть с
+    ``dead_reason='ended'`` (``Store.apply_item_ended``)."""
+
+    item_number: str            # = запрошенный item_id (со страницы не парсим)
+
+
+@dataclass(frozen=True, slots=True)
 class ItemPage:
     """Страница товара (PDP). Все поля обязательны, кроме last_updated,
     shipping_cost (None — суммы нет: «contact seller» либо самовывоз

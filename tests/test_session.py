@@ -22,7 +22,7 @@ from playwright.async_api import TimeoutError as PWTimeoutError
 from playwright._impl._errors import TargetClosedError
 
 import ebaylib.browser.session as sess_mod
-from ebaylib import EbaySession, ErrorPageError, ParseError, AccessDeniedError
+from ebaylib import AccessDeniedError, EbaySession, ErrorPageError, ItemEnded, ParseError
 from ebaylib.browser.session import _page_dead, _retryable
 
 FIX = Path(__file__).parent / "fixtures"
@@ -40,6 +40,7 @@ DENIED = dict(title="Access Denied")
 ERRPAGE = dict(title="Error Page | eBay")
 def SRP(html): return dict(title="x for sale | eBay", content=html)
 def ITEM(html): return dict(title="item | eBay", content=html, frames=True)
+ITEM_ENDED = dict(title="item | eBay", ended=True)  # завершённый листинг
 def DEAD(): return dict(raise_=PWError("Page.goto: net::ERR_CONNECTION_CLOSED at https://x/"))
 
 
@@ -58,7 +59,7 @@ class FakePage:
         self.name, self.script = name, list(script)
         self.gotos = []
         self.url = "about:blank"
-        self._title, self._content, self._frames = "", "", []
+        self._title, self._content, self._frames, self._ended = "", "", [], False
 
     async def goto(self, url, wait_until=None):
         assert self.script, f"{self.name}: script exhausted at goto {url}"
@@ -70,11 +71,14 @@ class FakePage:
         self._title = step["title"]
         self._content = step.get("content", "")
         self._frames = [FakeFrame()] if step.get("frames") else []
+        self._ended = step.get("ended", False)
 
     async def title(self): return self._title
     async def content(self): return self._content
     async def wait_for_load_state(self, state): pass
     async def wait_for_selector(self, sel, state=None, timeout=None): pass
+    async def query_selector(self, sel):  # ended-детект готовности
+        return object() if (self._ended and "condensed-card" in sel) else None
     async def wait_for_timeout(self, ms): await asyncio.sleep(0)
     def locator(self, sel): return FakeLocator()
     @property
@@ -181,6 +185,20 @@ def test_item_retried_whole_on_new_page():
     assert it.description == "Professionally packaged", repr(it.description)
 
 
+def test_item_ended_returns_marker_without_zip():
+    # ENDED-страница: возвращаем ItemEnded(item_id) сразу, без ZIP-сверки
+    # (один goto на item — никаких setter-SRP/повторных заходов)
+    pages = [FakePage("A", [HOME, ITEM_ENDED])]
+    get_page, calls = feeder(pages)
+    s = EbaySession(get_page, page_delay_s=0.05)
+    res = asyncio.run(s.fetch_item("205404777715", zip="19701"))
+    assert isinstance(res, ItemEnded), type(res)
+    assert res.item_number == "205404777715"
+    assert calls == ["A"]
+    item_gotos = [u for u in pages[0].gotos if "/itm/" in u]
+    assert len(item_gotos) == 1 and not [u for u in pages[0].gotos if "/sch/" in u]
+
+
 def test_fatal_error_page_no_replacement():
     pages = [FakePage("A", [HOME, ERRPAGE])]
     get_page, calls = feeder(pages)
@@ -224,6 +242,7 @@ if __name__ == "__main__":
     test_replacement_chain_and_delays()
     test_no_delay_before_first_page()
     test_item_retried_whole_on_new_page()
+    test_item_ended_returns_marker_without_zip()
     test_fatal_error_page_no_replacement()
     test_fatal_zip_mismatch_after_setter()
     test_duplicate_queries_and_str_input()

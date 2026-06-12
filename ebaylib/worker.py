@@ -42,6 +42,7 @@ from contextlib import suppress
 from datetime import datetime, timezone
 
 from .browser.session import PAGE_DELAY_S, EbaySession
+from .models import ItemEnded
 from .store import Store
 
 logger = logging.getLogger("ebaylib")
@@ -103,7 +104,9 @@ async def _write_result(store: Store, task_done, task: dict, result, timing: dic
 
     Каталог: по вызову ``apply_catalog`` на каждый артикул (транзакция на
     артикул; повторная запись после переотдачи идемпотентна), ``db`` — словарь
-    «артикул → статистика БД». Item: ``apply_item``, ``db`` — статистика БД.
+    «артикул → статистика БД». Item: ``apply_item`` (живой ``ItemPage``) либо
+    ``apply_item_ended`` (завершённый ``ItemEnded`` — железная смерть),
+    ``db`` — статистика БД.
 
     В ``task_done`` уходит ``{"db": …, "timing": …}``: ``timing`` несёт
     ``started_at`` (wall-clock ISO взятия задачи), ``parse_ms`` (длительность
@@ -120,6 +123,8 @@ async def _write_result(store: Store, task_done, task: dict, result, timing: dic
                 zip=params["zip"], condition=params.get("condition"),
                 min_price=params.get("min_price"), max_price=params.get("max_price"),
             )
+    elif isinstance(result, ItemEnded):
+        db = await store.apply_item_ended(result.item_number)
     else:
         db = await store.apply_item(result, zip=params["zip"])
     t_w1 = loop.time()

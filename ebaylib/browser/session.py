@@ -39,9 +39,10 @@ from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 from ..errors import AccessDeniedError, ParseError
 from ..html.item import parse_item_page, ship_to_location
 from ..html.page_state import PageKind
+from ..html.selectors import Item
 from ..html.srp import parse_search_page
 from ..http.fx import convert_cards
-from ..models import Catalog, CatalogItem, CatalogResult, ItemPage, SrpCard
+from ..models import Catalog, CatalogItem, CatalogResult, ItemEnded, ItemPage, SrpCard
 from ..urls import ITEMS_PER_PAGE, build_search_url
 from .readiness import wait_until_ready
 
@@ -235,16 +236,21 @@ class EbaySession:
 
     async def fetch_item(
         self, item_id: str, *, zip: str, desc_timeout_s: float = DESC_TIMEOUT_S
-    ) -> ItemPage:
-        """Страница товара → ``ItemPage`` (основной HTML + iframe-описание).
+    ) -> ItemPage | ItemEnded:
+        """Страница товара → ``ItemPage`` (основной HTML + iframe-описание)
+        либо ``ItemEnded`` (листинг завершён — бейдж ENDED, данных нет).
 
-        ``zip`` обязателен: без ship-to локации eBay считает её по IP-гео
-        (на ``/itm/`` URL-параметр ``_stpos`` игнорируется, локация
-        сессионная). Поток оптимистичный: сразу на товар, сверка
-        ``shipToLocation`` в его же HTML; мискматч → один setter-визит SRP
-        (``_nkw`` = item_id, ``_stpos={zip}``; даже «0 results» выставляет
-        ZIP на всю сессию) → повторный заход; повторный мискматч → ParseError.
-        Стационарно (ZIP уже стоит) — ноль лишних навигаций. См.
+        Завершённость проверяется ПЕРВОЙ, до ZIP-сверки (на ended ZIP не
+        ставится, доставки нет): готовность ждёт «бейдж ended ИЛИ цена» —
+        бейдж → возвращаем ``ItemEnded(item_id)`` сразу.
+
+        ``zip`` обязателен (для живого товара): без ship-to локации eBay
+        считает её по IP-гео (на ``/itm/`` URL-параметр ``_stpos``
+        игнорируется, локация сессионная). Поток оптимистичный: сразу на
+        товар, сверка ``shipToLocation`` в его же HTML; мискматч → один
+        setter-визит SRP (``_nkw`` = item_id, ``_stpos={zip}``; даже «0
+        results» выставляет ZIP на всю сессию) → повторный заход; повторный
+        мискматч → ParseError. Стационарно — ноль лишних навигаций. См.
         specs/item_flow.md.
 
         Блокировка/смерть страницы лечится внутри (замена + повтор товара
@@ -253,12 +259,17 @@ class EbaySession:
         Error Page."""
         expected = f"{zip},USA"
 
-        async def one_item(page) -> ItemPage:
+        async def one_item(page) -> ItemPage | ItemEnded:
             for is_retry in (False, True):
                 await page.goto(
                     _ITEM_URL.format(item_id=item_id), wait_until="domcontentloaded"
                 )
-                await wait_until_ready(page, PageKind.ITEM)
+                ended = await wait_until_ready(
+                    page, PageKind.ITEM, ended_selector=Item.ENDED_BADGE
+                )
+                if ended:
+                    logger.debug("item %s ENDED", item_id)
+                    return ItemEnded(item_number=item_id)
                 main_html = await page.content()
                 actual = ship_to_location(main_html)
                 if actual == expected:

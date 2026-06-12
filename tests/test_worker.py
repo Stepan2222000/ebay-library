@@ -17,7 +17,9 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from test_session import ERRPAGE, HOME, ITEM, ITEM_OK, SRP, SRP_10, FakePage, feeder
+from test_session import (
+    ERRPAGE, HOME, ITEM, ITEM_ENDED, ITEM_OK, SRP, SRP_10, FakePage, feeder,
+)
 
 from ebaylib import ErrorPageError, TaskFormatError, run_worker
 
@@ -46,6 +48,11 @@ class FakeStore:
         await asyncio.sleep(self._delay_s)
         self.calls.append(("item", item.item_number, zip))
         return {"item_id": int(item.item_number), "is_new": True}
+
+    async def apply_item_ended(self, item_id):
+        await asyncio.sleep(self._delay_s)
+        self.calls.append(("ended", item_id))
+        return {"item_id": int(item_id), "was_new": False, "dead_reason": "ended"}
 
     async def close(self):
         self.closed = True
@@ -91,6 +98,25 @@ def test_happy_flow():
     assert "T" in tm["started_at"] and all(isinstance(tm[k], int) for k in
            ("parse_ms", "write_ms", "total_ms"))
     assert tm["total_ms"] >= tm["write_ms"] >= 0
+    assert store.closed
+
+
+def test_ended_item_writes_via_apply_item_ended():
+    # ENDED-страница → fetch_item возвращает ItemEnded → запись через
+    # apply_item_ended, task_done со stats
+    pages = [FakePage("A", [HOME, ITEM_ENDED])]
+    get_page, _ = feeder(pages)
+    store = FakeStore()
+    done = []
+
+    async def task_done(task, stats):
+        done.append((task["id"], stats["db"]))
+
+    task = {"type": "item", "id": 7, "params": {"item_id": "205404777715", "zip": "19701"}}
+    asyncio.run(run_worker(get_page, tasks_source([task]),
+                           store, task_done=task_done, page_delay_s=0.05))
+    assert store.calls == [("ended", "205404777715")], store.calls
+    assert done == [(7, {"item_id": 205404777715, "was_new": False, "dead_reason": "ended"})], done
     assert store.closed
 
 
@@ -173,6 +199,7 @@ def test_none_exits_cleanly():
 
 if __name__ == "__main__":
     test_happy_flow()
+    test_ended_item_writes_via_apply_item_ended()
     test_parse_error_flushes_tail()
     test_write_error_kills_promptly()
     test_bad_tasks_die_without_browser()

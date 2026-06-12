@@ -15,7 +15,7 @@
 from .browser.session import EbaySession
 from .errors import AccessDeniedError, ErrorPageError, ParseError
 from .http.images import fetch_images
-from .models import Catalog, CatalogItem, CatalogResult, ItemPage
+from .models import Catalog, CatalogItem, CatalogResult, ItemEnded, ItemPage
 from .store import Store
 from .worker import TaskFormatError, run_worker
 
@@ -27,7 +27,7 @@ __all__ = [
     # фото (отдельная операция, без браузера)
     "fetch_images",
     # результаты
-    "CatalogResult", "Catalog", "CatalogItem", "ItemPage",
+    "CatalogResult", "Catalog", "CatalogItem", "ItemPage", "ItemEnded",
     # исключения — типы смерти воркера
     "ParseError", "AccessDeniedError", "ErrorPageError", "TaskFormatError",
 ]

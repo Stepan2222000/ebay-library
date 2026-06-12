@@ -101,6 +101,16 @@ class Store:
             "SELECT apply_item_snapshot($1, $2::jsonb)", zip, payload,
         )
 
+    async def apply_item_ended(self, item_id: str) -> dict:
+        """Листинг завершён (ENDED) → ``apply_item_ended`` — железная смерть
+        (``dead_reason='ended'``, мгновенно, минуя misses-порог). Товара не
+        было в БД → создаётся «родившимся мёртвым» (только id). Возвращает
+        ``{item_id, was_new, dead_reason}``."""
+        conn = await self._connection()
+        return await conn.fetchval(
+            "SELECT apply_item_ended($1::bigint)", int(item_id),
+        )
+
     async def close(self) -> None:
         if self._conn is not None and not self._conn.is_closed():
             await self._conn.close()

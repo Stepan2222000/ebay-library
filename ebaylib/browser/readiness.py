@@ -81,14 +81,21 @@ async def wait_until_ready(
     expect: PageKind,
     timeout_s: float = PARDON_TIMEOUT_S,
     anchor_timeout_s: float = ANCHOR_TIMEOUT_S,
-) -> None:
-    """Ждёт, пока ``page`` станет готовой как ``expect``.
+    ended_selector: str | None = None,
+) -> bool:
+    """Ждёт, пока ``page`` станет готовой как ``expect``. Возвращает ``True``,
+    если страница оказалась завершённым листингом (``ended_selector`` появился
+    раньше якорей готовности), иначе ``False``.
 
     Готовность = (1) не-блок и целевой тип по url+title (page_state), затем
     (2) появление всех DOM-якорей типа (всё, что будем парсить). Бросает
     AccessDeniedError / ErrorPageError / TimeoutError согласно политикам
     из шапки модуля (классификацию «что лечится заменой» делает session).
-    """
+
+    ``ended_selector`` (только для item): ENDED-бейдж завершённого листинга.
+    Он взаимоисключающ с PRICE_PRIMARY (цены у ended нет), поэтому ждём
+    «бейдж ИЛИ первый критический якорь» — что появится первым; бейдж →
+    ``True`` (данных листинга нет, дальше не ждём)."""
     loop = asyncio.get_event_loop()
     deadline = loop.time() + timeout_s
     saved_unknown = False
@@ -103,10 +110,18 @@ async def wait_until_ready(
         # PARDON — ничего не делаем, продолжаем ждать в цикле.
 
         if is_ready(state, expect):
-            # url целевой и title нормальный — дождёмся всех DOM-якорей типа.
+            # url целевой и title нормальный — дождёмся DOM-якорей типа.
             await page.wait_for_load_state("domcontentloaded")
+            if ended_selector is not None:
+                # ended-бейдж ИЛИ цена (взаимоисключающи) — что первым
+                await page.wait_for_selector(
+                    f"{ended_selector}, {Item.PRICE_PRIMARY}",
+                    state="attached", timeout=anchor_timeout_s * 1000.0,
+                )
+                if await page.query_selector(ended_selector):
+                    return True
             await _wait_anchors(page, expect, anchor_timeout_s)
-            return
+            return False
 
         if (
             state.antibot is None

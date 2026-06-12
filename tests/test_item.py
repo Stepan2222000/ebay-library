@@ -2,8 +2,11 @@
 
 from pathlib import Path
 
+from bs4 import BeautifulSoup
+
 from ebaylib import ParseError
 from ebaylib.html.item import parse_item_page, ship_to_location
+from ebaylib.html.selectors import Item
 
 FIX = Path(__file__).parent / "fixtures"
 
@@ -101,6 +104,21 @@ def test_ship_to_location():
         raise AssertionError("expected ParseError")
 
 
+def test_ended_badge_detection():
+    # бейдж ENDED (.x-item-condensed-card) — на завершённых листингах, и его
+    # НЕТ на живых: детект (browser-слой) опирается ровно на это.
+    for num in ("205404777715", "116527117915"):
+        html = (FIX / f"item_ended_{num}.html").read_text(encoding="utf-8", errors="replace")
+        soup = BeautifulSoup(html, "html.parser")
+        assert soup.select_one(Item.ENDED_BADGE), f"ended {num}: бейдж не найден"
+        # цены у завершённого нет (взаимоисключающе с бейджем)
+        assert soup.select_one(Item.PRICE_PRIMARY) is None, f"ended {num}: внезапно есть цена"
+    for num in EXPECTED:  # живые фикстуры
+        html = (FIX / f"item_{num}.html").read_text(encoding="utf-8", errors="replace")
+        soup = BeautifulSoup(html, "html.parser")
+        assert soup.select_one(Item.ENDED_BADGE) is None, f"живой {num}: ложный ended-бейдж"
+
+
 if __name__ == "__main__":
     test_items()
     test_description_from_iframe_html()
@@ -108,4 +126,5 @@ if __name__ == "__main__":
     test_condition_dash_none()
     test_not_item_raises()
     test_ship_to_location()
+    test_ended_badge_detection()
     print("PASS")
