@@ -6,7 +6,8 @@
 - ``html/``    — Слой 1: чистый парсинг HTML/url → данные (без браузера и сети);
 - ``http/``    — HTTP-IO без браузера (fx-конвертация, фото);
 - ``browser/`` — Слой 2: живой Playwright (готовность, ``EbaySession``);
-- ``store``    — запись результатов в БД ebay_data (клиент серверного API).
+- ``store``    — запись результатов в БД ebay_data (клиент серверного API);
+- ``worker``   — ``run_worker``: цикл «задача → парсинг → запись → task_done».
 """
 
 from .browser.readiness import wait_until_ready
@@ -20,6 +21,7 @@ from .http.images import fetch_images
 from .models import Catalog, CatalogItem, CatalogResult, ItemPage, SearchPage, SrpCard
 from .store import Store
 from .urls import ITEMS_PER_PAGE, build_search_url
+from .worker import TaskFormatError, run_worker
 
 __version__ = "0.1.0"
 
@@ -38,6 +40,8 @@ __all__ = [
     "wait_until_ready",
     # запись результатов в БД ebay_data
     "Store",
+    # цикл воркера
+    "run_worker", "TaskFormatError",
     # конвертация валют в USD (fx-эндпоинт)
     "convert_cards",
     # скачивание фото (HTTP-IO, без браузера)
