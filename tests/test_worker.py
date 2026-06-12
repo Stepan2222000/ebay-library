@@ -102,8 +102,8 @@ def test_parse_error_flushes_tail():
     try:
         asyncio.run(run_worker(get_page, tasks_source([CATALOG_TASK, task2]),
                                store, task_done=task_done, page_delay_s=0.05))
-    except ErrorPageError:
-        pass
+    except ErrorPageError as e:
+        assert e.task is task2, getattr(e, "task", None)  # виновница приложена
     else:
         raise AssertionError("expected ErrorPageError")
     # хвост дописан перед смертью: результат задачи 1 в БД, подтверждение было
@@ -135,6 +135,7 @@ def test_write_error_kills_promptly():
         asyncio.run(main())
     except RuntimeError as e:
         assert "db down" in str(e), e
+        assert e.task is CATALOG_TASK, getattr(e, "task", None)  # задача, которая писалась
     else:
         raise AssertionError("expected RuntimeError('db down')")
     assert store.closed

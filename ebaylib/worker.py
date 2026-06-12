@@ -25,6 +25,10 @@
 смертью (добытое не выбрасываем), при ошибке ЗАПИСИ — умираем сразу, даже
 если парсинг висит в ожидании задач. Незаписанные задачи переотдаёт
 оркестратор (по ним не было ``task_done``).
+
+Задача-виновница при смерти: пишется в лог (ERROR) и прикладывается к
+исключению атрибутом ``task`` (для смерти записи — задача, которая писалась;
+для смерти парсинга — парсящаяся; сбой ``next_task`` — без задачи).
 """
 
 from __future__ import annotations
@@ -45,6 +49,17 @@ _STOP = object()   # сентинел: писатель, дописав очер
 class TaskFormatError(Exception):
     """Задача не соответствует контракту (type/params) — баг оркестратора,
     критично: воркер умирает."""
+
+
+def _blame(e: BaseException, task: dict, where: str) -> None:
+    """Называет задачу-виновницу: ERROR в лог + атрибут ``task`` на исключении
+    (оркестратор может прочитать программно). Best-effort: исключения со
+    __slots__ атрибут не примут — лог всё равно останется."""
+    logger.error("%s at task %.300s (%s: %.200s)", where, task, type(e).__name__, e)
+    try:
+        e.task = task
+    except Exception:
+        pass
 
 
 def _params(task) -> dict:
@@ -125,7 +140,11 @@ async def run_worker(
             if got is _STOP:
                 return
             task, result = got
-            await _write_result(store, task_done, task, result)
+            try:
+                await _write_result(store, task_done, task, result)
+            except BaseException as e:
+                _blame(e, task, "write failed")
+                raise
 
     writer_task = asyncio.create_task(writer())
 
@@ -156,6 +175,7 @@ async def run_worker(
     try:
         try:
             while True:
+                task = None
                 task = await race(next_task())
                 if task is None:
                     logger.debug("next_task -> None, finishing")
@@ -163,7 +183,11 @@ async def run_worker(
                 logger.debug("task: %.200s", task)
                 result = await race(_dispatch(session, task))
                 await race(queue.put((task, result)))
-        except BaseException:
+        except BaseException as e:
+            # Виновница в лог и на исключение (если её ещё не назвал писатель;
+            # сбой next_task — задачи нет, только лог типа ошибки).
+            if getattr(e, "task", None) is None and task is not None:
+                _blame(e, task, "worker dying")
             # Ошибка парсинга/next_task (или писателя — через race): дописываем
             # уже готовый хвост очереди, затем умираем с исходной ошибкой.
             try:
