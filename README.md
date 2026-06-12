@@ -1,81 +1,103 @@
 # ebay-library
 
-Библиотека методов парсинга eBay для воркеров: каталог (SRP), страницы товаров
-(PDP), скачивание фото, ожидание готовности/антибота. Оркестрация (пул воркеров,
-прокси, раздача задач) — вне библиотеки: воркер передаёт готовый Playwright
-`page`, библиотека делает остальное.
+Библиотека воркера для парсинга eBay: каталог (SRP), страницы товаров (PDP),
+фото, запись результатов в БД `ebay_data` и готовый цикл «задача → парсинг →
+запись → подтверждение». Оркестрация (пул воркеров, браузер/прокси, очередь
+задач) — вне библиотеки: воркер отдаёт три колбека, библиотека делает
+остальное.
 
 ## Установка
 
 ```bash
 pip install git+https://github.com/Stepan2222000/ebay-library.git
-playwright install chromium
 ```
 
-Python 3.11+. Рекомендуется реальный Google Chrome (`channel="chrome"`) —
-eBay отдаёт ему стабильную каноническую вёрстку SRP.
+Python 3.11+. Браузер поднимает воркер — любой Playwright-совместимый;
+рекомендуется CloakBrowser (`pip install cloakbrowser`) или реальный Chrome
+(`channel="chrome"`): eBay отдаёт им каноническую вёрстку.
 
-## Использование
-
-ZIP доставки, состояние и цена задаются параметрами (через URL) — отдельной
-UI-установки ZIP нет. Рекомендованные значения: `zip="19701"`, `condition="new"`.
+## Воркер целиком
 
 ```python
-from playwright.async_api import async_playwright
-from ebay_library import warmup, fetch_catalogs, fetch_item, fetch_images
+import asyncio
+from cloakbrowser import launch_async
+from ebaylib import Store, run_worker
 
-async with async_playwright() as p:
-    browser = await p.chromium.launch(headless=False, channel="chrome")
-    page = await (await browser.new_context(locale="en-US")).new_page()
+async def main():
+    browser = await launch_async(headless=False)
+    state = {"ctx": None}
 
-    await warmup(page)                                   # один раз на сессию
+    async def get_page():                 # свежая страница по запросу сессии
+        if state["ctx"]:
+            await state["ctx"].close()    # старые страницы утилизирует воркер
+        state["ctx"] = await browser.new_context()
+        return await state["ctx"].new_page()
 
-    # condition: "all" (без фильтра) | "new" (Brand New + New Other) | "used"
-    batch = await fetch_catalogs(
-        page, ["8M0142836", "861787"],
-        zip="19701", condition="new", min_price=50, max_price=500,
-    )
-    print(len(batch.items), "карточек,", len(batch.errors), "ошибок")
+    async def next_task():                # источник задач: HTTP/Redis/файл…
+        return await my_queue.take()      # None → штатное завершение
 
-    item = await fetch_item(page, "277574984378", zip="19701")
-    print(item.title, item.price_usd, item.seller)
+    async def task_done(task, stats):     # строго ПОСЛЕ записи в БД
+        await my_queue.ack(task, stats)
 
-    photos = await fetch_images(item.image_urls)         # list[bytes], порядок сохранён
+    await run_worker(get_page, next_task, Store(), task_done=task_done)
+
+asyncio.run(main())
 ```
 
-Фильтры каталога опциональны (по умолчанию не добавляются), но `zip` на
-практике нужен: без него часть карточек рендерится без доставки и парсер
-падает. У `fetch_item` `zip` **обязателен**: локация item-страниц сессионная
-(URL-параметр на `/itm/` не работает) — библиотека ставит её сама одним
-setter-визитом SRP на сессию и сверяет `shipToLocation` на каждом товаре
-(см. [item_flow](specs/item_flow.md)).
+Формат задач (всё вне `params` — метаданные оркестратора, едут в `task_done`
+как есть):
 
-### Валюта → USD
+```json
+{"type": "catalog", "params": {"articles": ["805079T", "805079"],
+                               "zip": "19701", "condition": "new",
+                               "min_price": 50, "max_price": 500}}
+{"type": "item",    "params": {"item_id": "277574984378", "zip": "19701"}}
+```
 
-`fetch_catalog(s)` отдаёт `CatalogItem` с `price` и `shipping_cost` **в USD**.
-eBay печатает цены в исходной валюте (`$`, `US $`, `C $`, `EUR`…); после сбора
-страниц библиотека одним батчем переводит их в USD через fx-микросервис
-(`GET /convert`, см. [parts_prices](../parts_prices)). Адрес сервиса — env
-`FX_API_URL` (дефолт `http://194.164.245.107:8092`). Неизвестная валюта или
-недоступность сервиса → подзадача падает (без тихих подмен).
+Контракт жёсткий: **задача = парсинг + запись**; `task_done` вызывается
+только после фактической записи (`обработана = записана`). Любая ошибка валит
+воркер целиком — незаписанные задачи (без `task_done`) переотдаёт оркестратор,
+повторная запись идемпотентна. Блокировки eBay и смерть страницы воркера НЕ
+валят: сессия сама берёт новую страницу через `get_page` и продолжает с того
+же места.
 
-Чистый `parse_search_page` (офлайн, на сохранённом HTML) перевод не делает —
-отдаёт `SrpCard` с ценой в исходной валюте + токеном `currency_raw`; конвертацию
-при необходимости зовут отдельно через `convert_cards(cards)`.
-
-### URL выдачи отдельно
-
-`build_search_url` импортируется и строит URL сам (если нужен прямой контроль):
+## Парсинг без БД (EbaySession)
 
 ```python
-from ebay_library import build_search_url
+from ebaylib import EbaySession, fetch_images
 
-build_search_url("8M0142836", page=1, zip="19701", condition="new")
-# https://www.ebay.com/sch/i.html?_nkw=8M0142836&_sacat=0&_from=R40&rt=nc&_ipg=240&_pgn=1&LH_ItemCondition=3&_stpos=19701
+session = EbaySession(get_page)
+
+res = await session.fetch_catalog(["805079T", "805079"], zip="19701")
+res.items                      # все уникальные карточки (CatalogItem, USD)
+res.per_query["805079"]        # Catalog по конкретному артикулу
+
+item = await session.fetch_item("277574984378", zip="19701")
+photos = await fetch_images(item.image_urls)   # list[bytes], порядок сохранён
 ```
 
-Чистые парсеры (`parse_search_page`, `parse_item_page`) работают на
-сохранённом HTML без браузера.
+`zip` обязателен у item (локация сессионная, ставится setter-визитом SRP и
+сверяется по `shipToLocation`) и практически обязателен у каталога (без него
+доставка не рендерится). Выдача обходится до 5 страниц на запрос
+(`max_pages`), цены/доставка конвертируются в USD через fx-микросервис
+(`FX_API_URL`) одним батчем на каталог.
+
+## Запись в ebay_data
+
+`Store` — тонкий asyncpg-клиент серверного API БД (`apply_catalog_fetch` /
+`apply_item_snapshot`): апсерты, диффы, журнал изменений и death/resurrection
+делает сама БД (проект `ebay_data`, `db/schema.sql`). DSN — env
+`EBAY_DATA_DSN` (дефолт захардкожен); pgbouncer подключается заменой DSN.
+`Store.apply_catalog`/`apply_item` можно звать и без `run_worker`.
+
+## Ошибки
+
+Наружу летят только критические (воркер умирает, задача переотдаётся):
+`ParseError` (обязательное поле не выбито; несёт сырой HTML), `ErrorPageError`
+(«Error Page | eBay»), `TaskFormatError` (кривая задача), таймауты
+(Pardon/якоря/iframe). `AccessDeniedError` наружу не доходит — лечится
+заменой страницы внутри. Диагностика — логгер `"ebaylib"` (INFO — замены
+страниц с причиной, DEBUG — прогресс).
 
 ## Документация
 

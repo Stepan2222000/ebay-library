@@ -56,12 +56,21 @@ US + intl). Боевые селекторы — `ebay_library/parsing/selectors.
 
 ⚠️ Видимый текст (`.x-sellercard-atf__info__about-seller a span.ux-textspans--BOLD`)
 — это **display-name** («Florida Tool Shed»), витрина, может меняться.
-Сохраняем **username** (как в каталоге, общий ключ) — он в href ссылок
-карточки продавца `.x-sellercard-atf a[href]`:
+Сохраняем **username** (как в каталоге, общий ключ).
 
-- `_ssn=<username>` — обычный продавец;
-- `/str/<username>` — магазин (у магазинов `_ssn` в этой ссылке может
-  отсутствовать — проверять оба формата).
+**Единый источник — embedded-JSON страницы: `"sellerUserName":"<ник>"`**
+(regex по сырому HTML, ровно одно вхождение и всегда владелец листинга;
+проверено live 2026-06-12 на 23 PDP: с магазином/без/EU-сессии).
+
+Ссылки карточки продавца (`.x-sellercard-atf a[href]`) для извлечения ника
+НЕ используем — устаревший способ, у него три провала (всё live):
+
+- у продавцов БЕЗ магазина ни `_ssn=`, ни `/str/` нет вовсе — ссылки вида
+  `/sch/<username>/m.html` (напр. 236598927330, `tomt7600`);
+- слаг `/str/<slug>` может отличаться от username
+  (`avantims` ≠ `avantimotorsports`, item 376748192596);
+- `/str/` матчит и ЧУЖИЕ магазины из рекламных блоков (`/str/gpscity` на
+  странице другого продавца).
 
 Подтверждено live: `fltoolbox` ↔ «Florida Tool Shed», `bootundmotor` ↔
 «Boot und Motor». Контракт — [item_flow.md](item_flow.md).
@@ -168,7 +177,11 @@ ZIP=19701.
 | us paid express | `US $7.04 delivery in 2–4 days` (без See details) |
 | intl + approx | `AU $150.00 (approx US $107.52) Standard International Flat Rate Postage. See details` |
 | intl EUR (без $) | `EUR 29.99 (approx US $34.96) Standard International. See details` |
-| freight | `Freight - Check the item description or Contact the seller for details` (цены нет → ошибка; в нашей работе пока не встречался) |
+| freight | `Freight - Check the item description or Contact the seller for details` (цены нет) |
+| no price | `Will ship to United States. Read item description or contact seller for shipping options…` — продавец не настроил доставку до ZIP (live 174601590686) |
+
+Тексты с «contact seller» без суммы → `shipping_cost = None` (опционально,
+контракт в [item_flow.md](item_flow.md)); прочие непарсящиеся → ошибка.
 
 ⚠️ Хвост `eBay International Shipping Shop with confidence… Learn more . See
 details` — маркетинговый мусор в том же innerText; стоимость всегда в начале
@@ -236,17 +249,20 @@ iframe#desc_ifr
 Все картинки товара:
 
 ```
-.ux-image-carousel-item  img
+.ux-image-carousel-item  img      ← IMAGE_CAROUSEL
 ```
 
-Атрибут с **full-size URL** (1600px):
+**Большая версия — строится из URL картинки**: берём `src` (у ленивых
+картинок дальних слайдов `src` нет — URL лежит в `data-src`) и заменяем токен
+размера на `s-l1600` (`…/g/<id>/s-l500.webp` → `…/g/<id>/s-l1600.webp`).
+CDN всегда отдаёт максимум существующего размера (клампит к оригиналу, без
+404 — проверено httpx: для 500px-оригинала s-l1600/s-l2000 возвращают тот же
+файл).
 
-```
-img[data-zoom-src]                ← ссылка на s-l1600.webp
-```
-
-Другие размеры — в `srcset` (140w, 500w, 960w, 1600w).
-`src` обычно содержит превью или плейсхолдер.
+⚠️ `data-zoom-src` (раньше брали его) у части листингов **пустой** — когда
+большой версии нет физически (оригинал ≤500px; live 125943066590) — поэтому
+от него не зависим. Дедуп по URL с сохранением порядка карусели (eBay
+дублирует каждое фото в двух img).
 
 ---
 
