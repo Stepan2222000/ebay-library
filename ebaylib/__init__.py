@@ -1,49 +1,33 @@
-"""eBay parsing library — методы парсинга каталога и карточек eBay для воркеров.
+"""eBay parsing library — парсинг каталога/товаров eBay и запись в ebay_data.
 
-Публичное API — здесь; внутренняя раскладка — деталь реализации
-(см. specs/architecture.md):
+Публичное API — только необходимое воркеру:
 
-- ``html/``    — Слой 1: чистый парсинг HTML/url → данные (без браузера и сети);
-- ``http/``    — HTTP-IO без браузера (fx-конвертация, фото);
-- ``browser/`` — Слой 2: живой Playwright (готовность, ``EbaySession``);
-- ``store``    — запись результатов в БД ebay_data (клиент серверного API);
-- ``worker``   — ``run_worker``: цикл «задача → парсинг → запись → task_done».
+- ``run_worker`` + ``Store`` — цикл «задача → парсинг → запись → task_done»;
+- ``EbaySession`` — парсинг без БД-цикла (каталог/товар на живом Playwright);
+- ``fetch_images`` — скачивание фото (HTTP, без браузера);
+- модели результатов и типы исключений (по ним оркестратор различает смерти).
+
+Внутренняя раскладка — деталь реализации (см. specs/architecture.md);
+внутренности доступны по полным путям (``ebaylib.html.*``, ``ebaylib.urls``,
+``ebaylib.http.*``, ``ebaylib.browser.*``), но публичным контрактом не являются.
 """
 
-from .browser.readiness import wait_until_ready
 from .browser.session import EbaySession
 from .errors import AccessDeniedError, ErrorPageError, ParseError
-from .html.item import parse_item_page, ship_to_location
-from .html.page_state import Antibot, PageKind, classify, detect_antibot, detect_state
-from .html.srp import parse_search_page
-from .http.fx import convert_cards
 from .http.images import fetch_images
-from .models import Catalog, CatalogItem, CatalogResult, ItemPage, SearchPage, SrpCard
+from .models import Catalog, CatalogItem, CatalogResult, ItemPage
 from .store import Store
-from .urls import ITEMS_PER_PAGE, build_search_url
 from .worker import TaskFormatError, run_worker
 
 __version__ = "0.1.0"
 
 __all__ = [
-    # построение URL выдачи / errors
-    "build_search_url", "ITEMS_PER_PAGE",
-    "ParseError", "AccessDeniedError", "ErrorPageError",
-    # модели
-    "SrpCard", "CatalogItem", "SearchPage", "Catalog", "CatalogResult", "ItemPage",
-    # Слой 1 — чистый парсинг
-    "parse_search_page", "parse_item_page",
-    "ship_to_location",
-    "PageKind", "Antibot", "classify", "detect_antibot", "detect_state",
-    # Слой 2 — сессия воркера (живой Playwright)
-    "EbaySession",
-    "wait_until_ready",
-    # запись результатов в БД ebay_data
-    "Store",
-    # цикл воркера
-    "run_worker", "TaskFormatError",
-    # конвертация валют в USD (fx-эндпоинт)
-    "convert_cards",
-    # скачивание фото (HTTP-IO, без браузера)
+    # точка входа воркера
+    "run_worker", "Store", "EbaySession",
+    # фото (отдельная операция, без браузера)
     "fetch_images",
+    # результаты
+    "CatalogResult", "Catalog", "CatalogItem", "ItemPage",
+    # исключения — типы смерти воркера
+    "ParseError", "AccessDeniedError", "ErrorPageError", "TaskFormatError",
 ]

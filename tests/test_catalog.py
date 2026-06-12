@@ -2,7 +2,8 @@
 
 from pathlib import Path
 
-from ebaylib import ParseError, parse_search_page
+from ebaylib import ParseError
+from ebaylib.html.srp import parse_search_page
 
 FIX = Path(__file__).parent / "fixtures"
 
@@ -77,7 +78,7 @@ def test_convert_cards_live():
     # значит price_usd == price native до цента.
     import asyncio
 
-    from ebaylib import convert_cards
+    from ebaylib.http.fx import convert_cards
 
     html = (FIX / "srp_8M6000623_enUS.html").read_text(encoding="utf-8", errors="replace")
     cards = parse_search_page(html).items

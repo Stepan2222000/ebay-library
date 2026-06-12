@@ -51,7 +51,7 @@ _HOME_URL = "https://www.ebay.com/"
 _ITEM_URL = "https://www.ebay.com/itm/{item_id}"
 _DESC_FRAME_HOST = "ebaydesc.com"
 DESC_TIMEOUT_S = 15.0
-PAGE_DELAY_S = 7.0   # фикс. пауза перед каждым replacement-запросом новой страницы
+PAGE_DELAY_S = 0.5   # фикс. пауза перед каждым replacement-запросом новой страницы
 MAX_PAGES = 5        # лимит страниц выдачи на запрос (дефолт fetch_catalog)
 
 

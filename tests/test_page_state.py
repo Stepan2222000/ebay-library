@@ -1,6 +1,6 @@
 """T2 — детект страницы и antibot. Прогон: python3 -m pytest или прямой запуск."""
 
-from ebaylib import classify, detect_antibot, PageKind, Antibot
+from ebaylib.html.page_state import Antibot, PageKind, classify, detect_antibot
 
 CLASSIFY_CASES = [
     ("https://www.ebay.com/", PageKind.HOME),

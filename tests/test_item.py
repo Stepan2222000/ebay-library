@@ -2,7 +2,8 @@
 
 from pathlib import Path
 
-from ebaylib import ParseError, parse_item_page, ship_to_location
+from ebaylib import ParseError
+from ebaylib.html.item import parse_item_page, ship_to_location
 
 FIX = Path(__file__).parent / "fixtures"
 
