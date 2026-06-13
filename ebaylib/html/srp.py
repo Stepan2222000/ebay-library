@@ -161,6 +161,19 @@ def parse_search_page(html: str) -> SearchPage:
     if results_count is None:
         raise ParseError("results_count", None, None, html)
 
+    # 0 точных результатов → пустой каталог. eBay при этом часто показывает
+    # «похожие» (Results matching fewer words) прямо в .srp-results, а сам
+    # сепаратор уносит в отдельный блок srp-river-answer ВНЕ списка li — так
+    # что li-цикл его не видит и взял бы похожие за результаты (чужие товары
+    # под несуществующий артикул + падёж на рекламных карточках без seller).
+    # Поэтому при count==0 карточки НЕ парсим; сепаратор для флага ищем по
+    # всему документу. Live 2026-06-13: 43881A8 (0 + 240 похожих, сепаратор
+    # в river-answer), 09651605 (совсем пусто, сепаратора нет).
+    if results_count == 0:
+        sep = any("fewer words" in s.get_text().lower()
+                  for s in soup.select(Srp.FEWER_WORDS_SEP))
+        return SearchPage(results_count=0, items=[], has_fewer_words_sep=sep)
+
     has_fewer_words_sep = False
     items: list[SrpCard] = []
     for li in soup.select(Srp.RESULTS_LI):

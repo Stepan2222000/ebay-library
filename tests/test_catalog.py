@@ -61,6 +61,26 @@ def test_srp_8M0142836_no_location():
     assert all(it.location is None for it in page.items)
 
 
+def test_zero_results_no_exact_match():
+    # "0 results" + "No exact matches": eBay показывает «похожие» в .srp-results
+    # (сепаратор уносит в srp-river-answer ВНЕ li). Похожие — НЕ результаты по
+    # артикулу: items=[], не парсим их (иначе чужие товары + падёж seller на
+    # рекламных карточках). Сепаратор был → has_fewer_words_sep=True.
+    html = (FIX / "srp_no_exact_43881A8.html").read_text(encoding="utf-8", errors="replace")
+    page = parse_search_page(html)
+    assert page.results_count == 0, page.results_count
+    assert page.items == [], len(page.items)
+    assert page.has_fewer_words_sep is True
+
+
+def test_zero_results_empty():
+    # "0 results" совсем пустой (нет ни похожих, ни сепаратора) → items=[].
+    html = (FIX / "srp_empty_09651605.html").read_text(encoding="utf-8", errors="replace")
+    page = parse_search_page(html)
+    assert page.results_count == 0 and page.items == []
+    assert page.has_fewer_words_sep is False
+
+
 def test_not_srp_raises():
     # caller гарантирует тип через page_state; не-SRP HTML → ParseError
     # (нет счётчика результатов), а не отдельный WrongPageError.
@@ -96,6 +116,8 @@ if __name__ == "__main__":
     test_srp_8M6000623()
     test_srp_3211206()
     test_srp_8M0142836_no_location()
+    test_zero_results_no_exact_match()
+    test_zero_results_empty()
     test_not_srp_raises()
     test_convert_cards_live()
     print("PASS")
