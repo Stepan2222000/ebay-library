@@ -113,6 +113,13 @@ def parse_item_page(html: str, description_html: str | None = None) -> ItemPage:
         shipping_cost = None
     elif re.match(r"^Free\b", ship_raw, re.I):
         shipping_cost = 0.0
+    elif re.match(r"^Freight\b", ship_raw, re.I):
+        # Грузовая доставка крупногабарита: eBay не считает сумму, пишет
+        # "Freight - Check the item description or Contact the seller for
+        # details" (live 2026-06-13, напр. 257472890314, подшипник Slewing
+        # Ring) → суммы нет, None. Узко по маркеру Freight (^Free\b его не
+        # ловит: после Free идёт буква, нет границы слова).
+        shipping_cost = None
     elif "contact seller" in ship_raw.lower():
         shipping_cost = None
     else:

@@ -12,10 +12,12 @@ NEW_CONDITIONS = {
     # PDP пишет open box и с тире — en dash и дефис (live 2026-06-10,
     # напр. item 126706684824: "New – Open box")
     "new – open box", "new - open box",
-    # live 2026-06-12, item 115851272608 (e2e-прогон): "New with tags".
-    # Парные варианты eBay (without tags / with defects / with(out) box…)
-    # НЕ добавляем, пока не пойманы живьём — упадёт ParseError, добавим по факту.
-    "new with tags",
+    # live 2026-06-12, item 115851272608: "New with tags".
+    # live 2026-06-13 (валидатор): "New without tags" (168179676551 стрелки
+    # часов, 336502130116 самоцвет — не одежда, вариант по разным категориям);
+    # "New: Other (See Details)" (357585743989, PDP-формат с двоеточием —
+    # тот же New Other = новое). Парные варианты добавляем по мере поимки live.
+    "new with tags", "new without tags", "new: other (see details)",
 }
 # Все известные значения состояния. Нужны, чтобы (в каталоге) найти нужный span
 # среди нескольких — первым там может стоять текст совместимости, а не состояние.
