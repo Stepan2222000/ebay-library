@@ -56,6 +56,48 @@ PAGE_DELAY_S = 0.5   # фикс. пауза перед каждым replacement-
 MAX_PAGES = 5        # лимит страниц выдачи на запрос (дефолт fetch_catalog)
 
 
+class StageProfiler:
+    """Поэтапный замер времени обработки одной задачи методом «текущего этапа».
+
+    ``switch(name)`` закрывает интервал предыдущего этапа и открывает новый —
+    каждый момент времени отнесён ровно к одному этапу, поэтому сумма этапов
+    равна прожитому времени от первого ``switch`` до ``stop`` (без «дыр»).
+    Времена — дробные мс (накапливаются в секундах по монотонным часам).
+
+    Этапы каталога: swap (замены страниц: пауза+get_page+прогрев) · nav (goto
+    страниц выдачи) · ready (готовность) · parse (Слой 1) · fx (конвертация в
+    USD) · queue (ожидание писателя) · write (БД). Для item вместо fx — desc
+    (добыча iframe-описания). Все ключи всегда присутствуют (нули включены)."""
+
+    CATALOG_KEYS = ("swap", "nav", "ready", "parse", "fx", "queue", "write")
+    ITEM_KEYS = ("swap", "nav", "ready", "desc", "parse", "queue", "write")
+
+    def __init__(self, loop, keys):
+        self._loop = loop
+        self.stages = {k: 0.0 for k in keys}
+        self._cur = None
+        self._t = None
+
+    def switch(self, name: str) -> None:
+        now = self._loop.time()
+        if self._cur is not None:
+            self.stages[self._cur] += now - self._t
+        self._cur = name
+        self._t = now
+
+    def stop(self) -> None:
+        self.switch(None)
+
+    def stages_ms(self) -> dict:
+        return {k: round(v * 1000, 3) for k, v in self.stages.items()}
+
+
+def _mark(prof: "StageProfiler | None", stage: str) -> None:
+    """Переключить этап профайлера, если он задан (без worker — замеров нет)."""
+    if prof is not None:
+        prof.switch(stage)
+
+
 def _page_dead(exc: BaseException) -> bool:
     """Транспортная смерть страницы — лечится только новым page.
 
@@ -102,10 +144,11 @@ class EbaySession:
         await wait_until_ready(page, PageKind.HOME)
         logger.debug("warmup ok")
 
-    async def _acquire(self, *, replacement: bool):
+    async def _acquire(self, *, replacement: bool, prof=None):
         """Берёт у воркера страницу и прогревает. Блок/смерть на самом прогреве
         → следующая замена (без лимита). Пауза — перед каждым replacement-
-        запросом (блок только что был, даём остыть)."""
+        запросом (блок только что был, даём остыть). Всё это — этап ``swap``."""
+        _mark(prof, "swap")
         while True:
             if replacement:
                 await asyncio.sleep(self._page_delay_s)
@@ -123,11 +166,11 @@ class EbaySession:
                 continue
             return page
 
-    async def _run(self, unit, *, what: str):
+    async def _run(self, unit, *, what: str, prof=None):
         """Крутит ``unit(page)`` до успеха: ретрай (замена страницы) только на
         блокировке/смерти транспорта, всё остальное — критически наружу."""
         if self._page is None:
-            self._page = await self._acquire(replacement=False)
+            self._page = await self._acquire(replacement=False, prof=prof)
         while True:
             try:
                 return await unit(self._page)
@@ -138,7 +181,7 @@ class EbaySession:
                     "page lost at %s (%s: %.200s) — replacing",
                     what, type(e).__name__, e,
                 )
-                self._page = await self._acquire(replacement=True)
+                self._page = await self._acquire(replacement=True, prof=prof)
 
     # ------------------------------------------------------------- каталог
 
@@ -151,6 +194,7 @@ class EbaySession:
         min_price: float | None = None,
         max_price: float | None = None,
         max_pages: int = MAX_PAGES,
+        prof=None,
     ) -> CatalogResult:
         """Каталоги по запросу или списку запросов — один универсальный вход.
 
@@ -192,11 +236,14 @@ class EbaySession:
                 url = build_search_url(query, page=pgn, **filters)
 
                 async def one_srp(page, url=url):
+                    _mark(prof, "nav")
                     await page.goto(url, wait_until="domcontentloaded")
+                    _mark(prof, "ready")
                     await wait_until_ready(page, PageKind.SRP)
+                    _mark(prof, "parse")
                     return parse_search_page(await page.content())
 
-                sp = await self._run(one_srp, what=f"srp {query!r} pgn={pgn}")
+                sp = await self._run(one_srp, what=f"srp {query!r} pgn={pgn}", prof=prof)
                 pages_fetched += 1
                 logger.debug("srp %r pgn=%d: %d cards", query, pgn, len(sp.items))
                 if pgn == 1:
@@ -217,6 +264,7 @@ class EbaySession:
                 pgn += 1
 
             # Один fx-батч на каталог запроса; сбой fx — критически наружу.
+            _mark(prof, "fx")
             converted = await convert_cards(cards)
             per_query[query] = Catalog(
                 query=query,
@@ -235,7 +283,8 @@ class EbaySession:
     # ---------------------------------------------------------------- item
 
     async def fetch_item(
-        self, item_id: str, *, zip: str, desc_timeout_s: float = DESC_TIMEOUT_S
+        self, item_id: str, *, zip: str, desc_timeout_s: float = DESC_TIMEOUT_S,
+        prof=None,
     ) -> ItemPage | ItemEnded:
         """Страница товара → ``ItemPage`` (основной HTML + iframe-описание)
         либо ``ItemEnded`` (листинг завершён — бейдж ENDED, данных нет).
@@ -261,15 +310,18 @@ class EbaySession:
 
         async def one_item(page) -> ItemPage | ItemEnded:
             for is_retry in (False, True):
+                _mark(prof, "nav")
                 await page.goto(
                     _ITEM_URL.format(item_id=item_id), wait_until="domcontentloaded"
                 )
+                _mark(prof, "ready")
                 ended = await wait_until_ready(
                     page, PageKind.ITEM, ended_selector=Item.ENDED_BADGE
                 )
                 if ended:
                     logger.debug("item %s ENDED", item_id)
                     return ItemEnded(item_number=item_id)
+                _mark(prof, "parse")
                 main_html = await page.content()
                 actual = ship_to_location(main_html)
                 if actual == expected:
@@ -277,15 +329,19 @@ class EbaySession:
                 if is_retry:
                     raise ParseError("ship_to_location", actual, item_id, main_html)
                 logger.debug("zip mismatch (%s != %s) — setter SRP visit", actual, expected)
+                _mark(prof, "nav")
                 await page.goto(
                     build_search_url(item_id, page=1, zip=zip),
                     wait_until="domcontentloaded",
                 )
+                _mark(prof, "ready")
                 await wait_until_ready(page, PageKind.SRP)
+            _mark(prof, "desc")
             description_html = await _description_html(page, desc_timeout_s)
+            _mark(prof, "parse")
             return parse_item_page(main_html, description_html)
 
-        return await self._run(one_item, what=f"item {item_id}")
+        return await self._run(one_item, what=f"item {item_id}", prof=prof)
 
 
 async def _description_html(page, timeout_s: float) -> str:

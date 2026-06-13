@@ -92,12 +92,18 @@ def test_happy_flow():
     assert done[0][1]["db"] == {"8M0142836": {"fetch_id": 1, "items_total": 10}}, done[0]
     assert done[0][2] >= 1 and done[1][2] == 2, done
     assert done[1][1]["db"]["item_id"] == 277574984378
-    # тайминги: started_at (ISO), parse_ms/write_ms/total_ms (int), без _t_start
+    # тайминги: started_at (ISO), total_ms, residual_ms, поэтапный stages
     tm = done[0][1]["timing"]
-    assert set(tm) == {"started_at", "parse_ms", "write_ms", "total_ms"}, tm
-    assert "T" in tm["started_at"] and all(isinstance(tm[k], int) for k in
-           ("parse_ms", "write_ms", "total_ms"))
-    assert tm["total_ms"] >= tm["write_ms"] >= 0
+    assert set(tm) == {"started_at", "total_ms", "residual_ms", "stages"}, tm
+    assert "T" in tm["started_at"]
+    # каталог: полный набор ключей этапов (включая нули)
+    assert set(tm["stages"]) == {"swap", "nav", "ready", "parse", "fx", "queue", "write"}
+    # item-задача: вместо fx — desc
+    assert set(done[1][1]["timing"]["stages"]) == {
+        "swap", "nav", "ready", "desc", "parse", "queue", "write"}
+    # самопроверка: total ≈ сумма этапов (residual ~0, дробные мс)
+    assert abs(tm["residual_ms"]) < 1.0, tm["residual_ms"]
+    assert abs(tm["total_ms"] - sum(tm["stages"].values())) < 1.0
     assert store.closed
 
 

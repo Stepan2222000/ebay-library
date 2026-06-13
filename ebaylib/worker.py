@@ -5,9 +5,10 @@
 завершение; если задач пока нет — просто ждёт внутри) и ``store`` (клиент
 записи в ebay_data). Опционально ``task_done(task, stats)`` — подтверждение,
 вызывается строго ПОСЛЕ записи результата в БД: задача обработана = записана.
-``stats = {"db": …, "timing": {"started_at", "parse_ms", "write_ms",
-"total_ms"}}`` — статистика записи из БД + тайминги этапов (замеряет
-библиотека).
+``stats = {"db": …, "timing": {"started_at", "total_ms", "residual_ms",
+"stages": {…}}}`` — статистика записи из БД + поэтапные замеры времени
+(StageProfiler): сумма ``stages`` == ``total_ms`` (``residual_ms`` ≈ 0 —
+самопроверка). По ``stages`` ищут узкие места обработки.
 
 Формат задачи (всё вне ``params`` — метаданные оркестратора, библиотека их
 не читает и возвращает в ``task_done`` как есть):
@@ -41,7 +42,7 @@ import logging
 from contextlib import suppress
 from datetime import datetime, timezone
 
-from .browser.session import PAGE_DELAY_S, EbaySession
+from .browser.session import PAGE_DELAY_S, EbaySession, StageProfiler
 from .models import ItemEnded
 from .store import Store
 
@@ -80,8 +81,9 @@ def _require(params: dict, key: str):
     return value
 
 
-async def _dispatch(session: EbaySession, task: dict):
-    """Тип задачи → вызов сессии. Возвращает CatalogResult | ItemPage."""
+async def _dispatch(session: EbaySession, task: dict, prof=None):
+    """Тип задачи → вызов сессии (с профайлером этапов). Возвращает
+    CatalogResult | ItemPage | ItemEnded."""
     params = _params(task)
     kind = task.get("type")
     if kind == "catalog":
@@ -91,15 +93,17 @@ async def _dispatch(session: EbaySession, task: dict):
             condition=params.get("condition"),
             min_price=params.get("min_price"),
             max_price=params.get("max_price"),
+            prof=prof,
         )
     if kind == "item":
         return await session.fetch_item(
-            _require(params, "item_id"), zip=_require(params, "zip")
+            _require(params, "item_id"), zip=_require(params, "zip"), prof=prof
         )
     raise TaskFormatError(f"unknown task type {kind!r}")
 
 
-async def _write_result(store: Store, task_done, task: dict, result, timing: dict) -> None:
+async def _write_result(store: Store, task_done, task: dict, result, prof,
+                        started_at: str, t_start: float) -> None:
     """Запись результата задачи в БД, затем подтверждение ``task_done``.
 
     Каталог: по вызову ``apply_catalog`` на каждый артикул (транзакция на
@@ -109,12 +113,12 @@ async def _write_result(store: Store, task_done, task: dict, result, timing: dic
     ``db`` — статистика БД.
 
     В ``task_done`` уходит ``{"db": …, "timing": …}``: ``timing`` несёт
-    ``started_at`` (wall-clock ISO взятия задачи), ``parse_ms`` (длительность
-    парсинга), ``write_ms`` (длительность записи) и ``total_ms`` (старт →
-    конец записи, включая ожидание в очереди)."""
+    ``started_at`` (wall-clock ISO взятия задачи), поэтапную разбивку ``stages``
+    (см. StageProfiler), независимый ``total_ms`` (старт → конец записи) и
+    ``residual_ms`` (total − Σstages, должен быть ≈0 — самопроверка замеров)."""
     loop = asyncio.get_event_loop()
     params = task["params"]
-    t_w0 = loop.time()
+    prof.switch("write")
     if task["type"] == "catalog":
         db = {}
         for article, cat in result.per_query.items():
@@ -127,9 +131,15 @@ async def _write_result(store: Store, task_done, task: dict, result, timing: dic
         db = await store.apply_item_ended(result.item_number)
     else:
         db = await store.apply_item(result, zip=params["zip"])
-    t_w1 = loop.time()
-    timing["write_ms"] = round((t_w1 - t_w0) * 1000)
-    timing["total_ms"] = round((t_w1 - timing.pop("_t_start")) * 1000)
+    prof.stop()
+    stages = prof.stages_ms()
+    total_ms = round((loop.time() - t_start) * 1000, 3)
+    timing = {
+        "started_at": started_at,
+        "total_ms": total_ms,
+        "residual_ms": round(total_ms - sum(stages.values()), 3),
+        "stages": stages,
+    }
     stats = {"db": db, "timing": timing}
     logger.debug("written %s: %.200s", task.get("type"), stats)
     if task_done is not None:
@@ -160,9 +170,10 @@ async def run_worker(
             got = await queue.get()
             if got is _STOP:
                 return
-            task, result, timing = got
+            task, result, prof, started_at, t_start = got
             try:
-                await _write_result(store, task_done, task, result, timing)
+                await _write_result(store, task_done, task, result, prof,
+                                    started_at, t_start)
             except BaseException as e:
                 _blame(e, task, "write failed")
                 raise
@@ -204,10 +215,13 @@ async def run_worker(
                 logger.debug("task: %.200s", task)
                 started_at = datetime.now(timezone.utc).isoformat()
                 t_start = loop.time()
-                result = await race(_dispatch(session, task))
-                timing = {"started_at": started_at, "_t_start": t_start,
-                          "parse_ms": round((loop.time() - t_start) * 1000)}
-                await race(queue.put((task, result, timing)))
+                keys = (StageProfiler.CATALOG_KEYS
+                        if isinstance(task, dict) and task.get("type") == "catalog"
+                        else StageProfiler.ITEM_KEYS)
+                prof = StageProfiler(loop, keys)
+                result = await race(_dispatch(session, task, prof))
+                prof.switch("queue")  # парсинг закончен — ждём свободного писателя
+                await race(queue.put((task, result, prof, started_at, t_start)))
         except BaseException as e:
             # Виновница в лог и на исключение (если её ещё не назвал писатель;
             # сбой next_task — задачи нет, только лог типа ошибки).
