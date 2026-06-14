@@ -55,9 +55,11 @@ class Item:
     SPECIFICS_DL = "dl.ux-labels-values"
     SPECIFICS_KEY = "dt .ux-textspans"
     SPECIFICS_VALUE = "dd .ux-textspans"
-    # все img карусели: URL в src (ленивые — в data-src); большую версию строим
-    # заменой токена размера на s-l1600 (data-zoom-src бывает пустым)
-    IMAGE_CAROUSEL = ".ux-image-carousel-item img"
+    # фото-модуль листинга (контейнер) — якорь готовности; есть во всех вёрстках
+    # (нормальной, min-view, бесфотовой). Сами URL — из embedded-JSON
+    # PICTURE.mediaList (см. html/item._gallery_urls), не из DOM (ленивый/засорён
+    # «похожими»)
+    X_PHOTOS = "[data-testid='x-photos']"
     # описание берётся не из DOM, а HTTP-запросом по item_id (см.
     # http/description); селектора iframe#desc_ifr больше нет — он не у всех
     # товаров и в браузере рендерится ненадёжно

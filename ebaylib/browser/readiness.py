@@ -46,7 +46,9 @@ READY_ANCHORS: dict[PageKind, tuple[str, ...]] = {
         f"{Item.SHIPPING}, {Item.PICKUP}",
         Item.SELLER_CARD,
         Item.SPECIFICS_DL,
-        Item.IMAGE_CAROUSEL,
+        # фото-модуль (контейнер) — есть во всех вёрстках; .ux-image-carousel-item
+        # у min-view отсутствует (был 30с-таймаут-смерть). URL фото — из JSON.
+        Item.X_PHOTOS,
         # описание НЕ ждём в DOM — берётся отдельным HTTP-запросом по item_id
         # (http/description), iframe #desc_ifr у части товаров отсутствует вовсе
     ),

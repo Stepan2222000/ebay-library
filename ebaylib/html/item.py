@@ -18,6 +18,7 @@ parse_item_page только для ITEM. Здесь — только разбо
 
 from __future__ import annotations
 
+import json
 import re
 import urllib.parse
 
@@ -34,6 +35,8 @@ _AMOUNT = r"[\d,]+(?:\.\d{1,2})?"
 _SELLER_USERNAME_RE = re.compile(r'"sellerUserName":"([^"]*)"')
 # токен размера в URL фото CDN (…/g/<id>/s-l500.webp) — нормализуем к s-l1600
 _SIZE_TOKEN_RE = re.compile(r"s-l\d+")
+# маркер JSON-модели фото-модуля в embedded-данных страницы
+_PICTURE_RE = re.compile(r'"PICTURE":\{"_type":"PictureViewModel"')
 
 
 def _txt(el) -> str | None:
@@ -52,6 +55,69 @@ def _extract_description(description_html: str) -> str:
     for tag in body(["script", "style"]):
         tag.decompose()
     return body.get_text("\n", strip=True)
+
+
+def _picture_model(html: str) -> dict | None:
+    """JSON-модель фото-модуля (PictureViewModel) из embedded-данных страницы —
+    балансировка скобок от маркера + json.loads. None — модуля на странице нет
+    (или JSON битый). Регексом не берём: он ловил бы фото «похожих товаров»."""
+    m = _PICTURE_RE.search(html)
+    if not m:
+        return None
+    start = html.index("{", m.start())
+    depth, in_str, esc = 0, False, False
+    for i in range(start, len(html)):
+        ch = html[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+        elif ch == '"':
+            in_str = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                try:
+                    return json.loads(html[start:i + 1])
+                except ValueError:
+                    return None
+    return None
+
+
+def _gallery_urls(html: str, item_number: str) -> list[str]:
+    """Фото листинга из PICTURE.mediaList → s-l1600, дедуп (порядок сохранён).
+
+    Источник — embedded-JSON (модель фото-модуля), не DOM: у min-view-вёрстки
+    в DOM только плейсхолдер imgNoImg.gif (фото грузится JS лениво), а на
+    странице полно картинок «похожих товаров». JSON — авторитетный листинг-скоуп
+    (подтверждено: совпало с DOM-парсером 8/8 на фото-товарах, live 2026-06-14).
+
+    Нет mediaList → [] (товар реально без фото — eBay-сигнал, напр. 291755507939,
+    не «не нашли»). Нет модуля PICTURE, либо mediaList есть, но URL не выбили →
+    ParseError (неизвестная вёрстка, не тихое пусто)."""
+    model = _picture_model(html)
+    if model is None:
+        raise ParseError("image_urls", None, item_number, html)
+    media = model.get("mediaList")
+    if media is None:
+        return []
+    urls: list[str] = []
+    seen: set[str] = set()
+    for m in media:
+        u = ((m.get("image") or {}).get("originalImg") or {}).get("URL")
+        if u:
+            u = _SIZE_TOKEN_RE.sub("s-l1600", u)
+            if u not in seen:
+                seen.add(u)
+                urls.append(u)
+    if media and not urls:
+        raise ParseError("image_urls", None, item_number, html)
+    return urls
 
 
 def parse_item_page(html: str, description_html: str | None = None) -> ItemPage:
@@ -173,23 +239,9 @@ def parse_item_page(html: str, description_html: str | None = None) -> ItemPage:
     if not specifics:
         raise ParseError("specifics", None, item_number, html)
 
-    # Галерея: большие версии фото. Единый способ: URL каждой картинки карусели
-    # (src; у ленивых картинок src нет — URL в data-src) + замена токена размера
-    # на s-l1600 — CDN всегда отдаёт максимум существующего (клампит к
-    # оригиналу, не 404). От data-zoom-src не зависим: у части листингов он
-    # ПУСТОЙ (большой версии нет физически; live 2026-06-10, напр. 125943066590
-    # — оригинал 500px). Проверено на 10 страницах: те же фото в том же порядке,
-    # что давал data-zoom-src. eBay дублирует фото в карусели — дедуп.
-    image_urls: list[str] = []
-    for img in soup.select(S.IMAGE_CAROUSEL):
-        raw = img.get("src") or img.get("data-src")
-        if not raw:
-            continue
-        url = _SIZE_TOKEN_RE.sub("s-l1600", raw)
-        if url not in image_urls:
-            image_urls.append(url)
-    if not image_urls:
-        raise ParseError("image_urls", None, item_number, html)
+    # Галерея: фото из embedded-JSON (PICTURE.mediaList), не из DOM (см.
+    # _gallery_urls). [] — у листинга нет фото (авторитетный сигнал модели).
+    image_urls = _gallery_urls(html, item_number)
 
     description = _extract_description(description_html) if description_html else ""
 

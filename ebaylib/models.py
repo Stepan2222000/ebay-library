@@ -92,11 +92,11 @@ class ItemEnded:
 class ItemPage:
     """Страница товара (PDP). Все поля обязательны, кроме last_updated,
     shipping_cost (None — суммы нет: «contact seller» либо самовывоз
-    «Local pickup only») и condition (None — продавец не указал состояние,
-    eBay рендерит «-- not specified»).
+    «Local pickup only»), condition (None — продавец не указал состояние,
+    eBay рендерит «-- not specified») и image_urls ([] — у листинга нет фото).
 
     Цена и доставка — всегда в USD (на intl-листингах берётся
-    «Approximately US $X»). Описание — текст из iframe-описания.
+    «Approximately US $X»). Описание — текст с itm.ebaydesc.com.
     """
 
     item_number: str            # eBay item number (цифры)
@@ -107,6 +107,6 @@ class ItemPage:
     seller: str                 # username продавца (как в каталоге)
     location: str               # из "Located in: <...>"
     specifics: dict[str, str]   # вся таблица характеристик (key → value)
-    image_urls: list[str]       # большие версии фото (s-l1600, клампится к оригиналу), дедуп
-    description: str            # текст из iframe-описания ("" — валидно, если пусто)
+    image_urls: list[str]       # большие версии фото (s-l1600), дедуп; [] — фото нет
+    description: str            # текст описания ("" — валидно, если пусто)
     last_updated: str | None    # дата правки листинга, если есть; иначе None
