@@ -212,9 +212,24 @@ def test_fatal_error_page_no_replacement():
     assert calls == ["A"], calls  # новую страницу не просили
 
 
-def test_fatal_zip_mismatch_after_setter():
-    # фикстура с чужим shipTo: заход → мисматч → setter-SRP → заход → мисматч → ParseError
-    pages = [FakePage("A", [HOME, ITEM(ITEM_RAW), SRP(SRP_10), ITEM(ITEM_RAW)])]
+def test_zip_set_on_second_attempt():
+    # ZIP «до победного»: 1-я перепроверка мимо (00-001), 2-й setter закрепляет
+    # (ITEM_OK = 19701,USA) → парсим. Заход + 2×(setter SRP + заход) = 6 goto.
+    pages = [FakePage("A", [HOME, ITEM(ITEM_RAW),
+                            SRP(SRP_10), ITEM(ITEM_RAW),
+                            SRP(SRP_10), ITEM(ITEM_OK)])]
+    get_page, calls = feeder(pages)
+    s = EbaySession(get_page, page_delay_s=0.05)
+    it = asyncio.run(s.fetch_item("277574984378", zip="19701"))
+    assert it.item_number == "277574984378", it
+    assert len([u for u in pages[0].gotos if "/sch/" in u]) == 2  # два setter-визита
+
+
+def test_fatal_zip_after_5_attempts():
+    # ZIP не закрепляется никогда (всегда 00-001) → ParseError после 5 попыток
+    # (не после 1-й). Заход + 5×(setter SRP + заход) = 12 goto.
+    script = [HOME, ITEM(ITEM_RAW)] + [SRP(SRP_10), ITEM(ITEM_RAW)] * 5
+    pages = [FakePage("A", script)]
     get_page, calls = feeder(pages)
     s = EbaySession(get_page, page_delay_s=0.05)
     try:
@@ -223,7 +238,7 @@ def test_fatal_zip_mismatch_after_setter():
         assert e.field == "ship_to_location" and e.raw == "00-001", (e.field, e.raw)
     else:
         raise AssertionError("expected ParseError")
-    assert calls == ["A"] and len(pages[0].gotos) == 4, (calls, pages[0].gotos)
+    assert len([u for u in pages[0].gotos if "/sch/" in u]) == 5  # ровно 5 setter-визитов
 
 
 def test_duplicate_queries_and_str_input():
@@ -244,6 +259,7 @@ if __name__ == "__main__":
     test_item_retried_whole_on_new_page()
     test_item_ended_returns_marker_without_zip()
     test_fatal_error_page_no_replacement()
-    test_fatal_zip_mismatch_after_setter()
+    test_zip_set_on_second_attempt()
+    test_fatal_zip_after_5_attempts()
     test_duplicate_queries_and_str_input()
     print("PASS")

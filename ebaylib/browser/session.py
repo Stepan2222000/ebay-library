@@ -54,6 +54,7 @@ _DESC_FRAME_HOST = "ebaydesc.com"
 DESC_TIMEOUT_S = 30.0  # iframe описания грузится лениво и медленно — 15с не хватало (≈60/76 таймаутов)
 PAGE_DELAY_S = 0.5   # фикс. пауза перед каждым replacement-запросом новой страницы
 MAX_PAGES = 5        # лимит страниц выдачи на запрос (дефолт fetch_catalog)
+ZIP_SET_ATTEMPTS = 5  # попыток setter-визита закрепить ZIP (свежая сессия: 1–2 хватает)
 
 
 class StageProfiler:
@@ -308,27 +309,44 @@ class EbaySession:
         Error Page."""
         expected = f"{zip},USA"
 
+        async def open_item(page) -> tuple[bool, str | None]:
+            """Заход на товар + готовность. (ended, main_html); main_html=None
+            если листинг завершён (ItemEnded)."""
+            _mark(prof, "nav")
+            await page.goto(
+                _ITEM_URL.format(item_id=item_id), wait_until="domcontentloaded"
+            )
+            _mark(prof, "ready")
+            ended = await wait_until_ready(
+                page, PageKind.ITEM, ended_selector=Item.ENDED_BADGE
+            )
+            if ended:
+                return True, None
+            _mark(prof, "parse")
+            return False, await page.content()
+
         async def one_item(page) -> ItemPage | ItemEnded:
-            for is_retry in (False, True):
-                _mark(prof, "nav")
-                await page.goto(
-                    _ITEM_URL.format(item_id=item_id), wait_until="domcontentloaded"
-                )
-                _mark(prof, "ready")
-                ended = await wait_until_ready(
-                    page, PageKind.ITEM, ended_selector=Item.ENDED_BADGE
-                )
-                if ended:
-                    logger.debug("item %s ENDED", item_id)
-                    return ItemEnded(item_number=item_id)
-                _mark(prof, "parse")
-                main_html = await page.content()
-                actual = ship_to_location(main_html)
-                if actual == expected:
-                    break
-                if is_retry:
+            ended, main_html = await open_item(page)
+            if ended:
+                logger.debug("item %s ENDED", item_id)
+                return ItemEnded(item_number=item_id)
+
+            # ZIP до победного: на свежем контексте ZIP не выставлен (eBay даёт
+            # локацию по гео-IP), а на свежей сессии setter персистится не с
+            # первого раза (~замер: 1–2 попытки). Крутим setter-визит SRP +
+            # повторный заход, сверяя ship_to_location со страницы, до
+            # ZIP_SET_ATTEMPTS попыток. Не закрепился → ParseError. Стационарно
+            # (ZIP уже стоит) — цикл не входит, ноль лишних навигаций.
+            actual = ship_to_location(main_html)
+            attempts = 0
+            while actual != expected:
+                if attempts >= ZIP_SET_ATTEMPTS:
                     raise ParseError("ship_to_location", actual, item_id, main_html)
-                logger.debug("zip mismatch (%s != %s) — setter SRP visit", actual, expected)
+                attempts += 1
+                logger.debug(
+                    "zip mismatch (%s != %s) — setter SRP visit %d/%d",
+                    actual, expected, attempts, ZIP_SET_ATTEMPTS,
+                )
                 _mark(prof, "nav")
                 await page.goto(
                     build_search_url(item_id, page=1, zip=zip),
@@ -336,6 +354,12 @@ class EbaySession:
                 )
                 _mark(prof, "ready")
                 await wait_until_ready(page, PageKind.SRP)
+                ended, main_html = await open_item(page)
+                if ended:
+                    logger.debug("item %s ENDED", item_id)
+                    return ItemEnded(item_number=item_id)
+                actual = ship_to_location(main_html)
+
             _mark(prof, "desc")
             description_html = await _description_html(page, desc_timeout_s)
             _mark(prof, "parse")
