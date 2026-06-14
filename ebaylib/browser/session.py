@@ -51,7 +51,7 @@ logger = logging.getLogger("ebaylib")
 _HOME_URL = "https://www.ebay.com/"
 _ITEM_URL = "https://www.ebay.com/itm/{item_id}"
 _DESC_FRAME_HOST = "ebaydesc.com"
-DESC_TIMEOUT_S = 15.0
+DESC_TIMEOUT_S = 30.0  # iframe описания грузится лениво и медленно — 15с не хватало (≈60/76 таймаутов)
 PAGE_DELAY_S = 0.5   # фикс. пауза перед каждым replacement-запросом новой страницы
 MAX_PAGES = 5        # лимит страниц выдачи на запрос (дефолт fetch_catalog)
 
