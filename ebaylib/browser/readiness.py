@@ -47,7 +47,8 @@ READY_ANCHORS: dict[PageKind, tuple[str, ...]] = {
         Item.SELLER_CARD,
         Item.SPECIFICS_DL,
         Item.IMAGE_CAROUSEL,
-        Item.DESC_IFRAME,
+        # описание НЕ ждём в DOM — берётся отдельным HTTP-запросом по item_id
+        # (http/description), iframe #desc_ifr у части товаров отсутствует вовсе
     ),
 }
 

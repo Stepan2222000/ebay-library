@@ -58,7 +58,9 @@ class Item:
     # все img карусели: URL в src (ленивые — в data-src); большую версию строим
     # заменой токена размера на s-l1600 (data-zoom-src бывает пустым)
     IMAGE_CAROUSEL = ".ux-image-carousel-item img"
-    DESC_IFRAME = "iframe#desc_ifr"
+    # описание берётся не из DOM, а HTTP-запросом по item_id (см.
+    # http/description); селектора iframe#desc_ifr больше нет — он не у всех
+    # товаров и в браузере рендерится ненадёжно
     # завершённый листинг: eBay рендерит компактную карточку с бейджем "Ended"
     # вместо buybox. Маркер железной смерти (live 2026-06-12: 2/2 ended, 0/10
     # живых). Взаимоисключающ с PRICE_PRIMARY (цены у ended нет).

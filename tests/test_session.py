@@ -1,7 +1,8 @@
 """T8 — EbaySession: контур замены страниц. Прогон: PYTHONPATH=. python3 tests/test_session.py
 
 Фейковый page реализует ровно те методы Playwright, которые дёргают
-session/readiness; контент — реальные фикстуры. Сеть нужна только fx-эндпоинту
+session/readiness; контент — реальные фикстуры. Описание (HTTP по item_id)
+подменено стабом ``_fake_fetch_description``. Сеть нужна только fx-эндпоинту
 (конвертация карточек каталога), браузер не нужен.
 
 Покрытие:
@@ -32,26 +33,23 @@ ITEM_RAW = (FIX / "item_277574984378.html").read_text(encoding="utf-8", errors="
 # фикстура снята с EU-сессии (shipTo "00-001"); для happy-path подменяем на наш ZIP
 ITEM_OK = ITEM_RAW.replace('"shipToLocation":"00-001"', '"shipToLocation":"19701%2CUSA"')
 assert ITEM_OK != ITEM_RAW
-DESC = "<html><body><p>Professionally packaged</p></body></html>"
+# Описание тянется HTTP-запросом (http/description.fetch_description), не из
+# браузера — в юнит-тестах подменяем стабом (без сети); парсер извлечёт текст.
+_DESC_HTML = "<html><body><p>Professionally packaged</p></body></html>"
+
+async def _fake_fetch_description(item_id):
+    return _DESC_HTML
+
+sess_mod.fetch_description = _fake_fetch_description
 
 # шаги сценария фейковой страницы (на последовательные goto)
 HOME = dict(title="Electronics, Cars, Fashion, Collectibles & More | eBay")
 DENIED = dict(title="Access Denied")
 ERRPAGE = dict(title="Error Page | eBay")
 def SRP(html): return dict(title="x for sale | eBay", content=html)
-def ITEM(html): return dict(title="item | eBay", content=html, frames=True)
+def ITEM(html): return dict(title="item | eBay", content=html)
 ITEM_ENDED = dict(title="item | eBay", ended=True)  # завершённый листинг
 def DEAD(): return dict(raise_=PWError("Page.goto: net::ERR_CONNECTION_CLOSED at https://x/"))
-
-
-class FakeFrame:
-    url = "https://itm.ebaydesc.com/itmdesc/123"
-    async def wait_for_load_state(self, state, timeout=None): pass
-    async def content(self): return DESC
-
-
-class FakeLocator:
-    async def scroll_into_view_if_needed(self): pass
 
 
 class FakePage:
@@ -59,7 +57,7 @@ class FakePage:
         self.name, self.script = name, list(script)
         self.gotos = []
         self.url = "about:blank"
-        self._title, self._content, self._frames, self._ended = "", "", [], False
+        self._title, self._content, self._ended = "", "", False
 
     async def goto(self, url, wait_until=None):
         assert self.script, f"{self.name}: script exhausted at goto {url}"
@@ -70,7 +68,6 @@ class FakePage:
         self.url = url
         self._title = step["title"]
         self._content = step.get("content", "")
-        self._frames = [FakeFrame()] if step.get("frames") else []
         self._ended = step.get("ended", False)
 
     async def title(self): return self._title
@@ -80,9 +77,6 @@ class FakePage:
     async def query_selector(self, sel):  # ended-детект готовности
         return object() if (self._ended and "condensed-card" in sel) else None
     async def wait_for_timeout(self, ms): await asyncio.sleep(0)
-    def locator(self, sel): return FakeLocator()
-    @property
-    def frames(self): return self._frames
 
 
 def feeder(pages):
@@ -102,7 +96,7 @@ def test_page_dead_classification():
     assert _page_dead(TargetClosedError("Page.goto: Target page, context or browser has been closed"))
     assert not _page_dead(PWTimeoutError("Page.goto: Timeout 30000ms exceeded."))  # таймаут критичен
     assert not _page_dead(ValueError("x"))
-    assert not _page_dead(TimeoutError("description iframe not loaded"))
+    assert not _page_dead(TimeoutError("anchor timeout waiting item"))
     assert _retryable(AccessDeniedError("Access Denied at https://x/"))
     assert not _retryable(ErrorPageError("Error Page at https://x/"))
     assert not _retryable(ParseError("seller", None, "1", "<html>"))

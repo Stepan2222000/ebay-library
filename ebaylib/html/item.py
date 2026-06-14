@@ -7,10 +7,10 @@ parse_item_page только для ITEM. Здесь — только разбо
 Все поля обязательны, кроме last_updated: любая нестыковка → ParseError
 наружу (с сырьём), весь парс падает. Цена и доставка всегда в USD.
 
-Описание товара живёт в отдельном iframe (itm.ebaydesc.com), которого нет в
-основном HTML. Caller (browser-слой) при необходимости достаёт HTML этого
-фрейма (frame.content()) и передаёт вторым аргументом ``description_html``.
-Передан — извлекаем текст; не передан — description = "".
+Описание товара живёт отдельным документом (itm.ebaydesc.com/itmdesc/<id>),
+которого нет в основном HTML. Caller тянет его HTTP-запросом по item_id
+(http/description.fetch_description) и передаёт сырой HTML вторым аргументом
+``description_html``. Передан — извлекаем текст; не передан — description = "".
 
 Здесь же ``ship_to_location`` — сессионный ZIP item-страниц (истина для
 верификации, см. specs/item_flow.md).
@@ -45,7 +45,8 @@ def _to_float(amount: str) -> float:
 
 
 def _extract_description(description_html: str) -> str:
-    """Текст описания из HTML iframe-фрейма. "" — валидно (продавец не заполнил)."""
+    """Текст описания из сырого HTML (itm.ebaydesc.com). "" — валидно (продавец
+    не заполнил / описания нет)."""
     soup = BeautifulSoup(description_html, "html.parser")
     body = soup.body or soup
     for tag in body(["script", "style"]):
@@ -57,7 +58,7 @@ def parse_item_page(html: str, description_html: str | None = None) -> ItemPage:
     """Парсит HTML страницы товара. ParseError, если обязательное поле не
     распарсилось. Caller гарантирует, что это PDP (проверено page_state).
 
-    ``description_html`` — HTML iframe-описания (frame.content()); передан —
+    ``description_html`` — сырой HTML описания (http/description); передан —
     извлекаем текст в поле description, не передан — description = ""."""
     soup = BeautifulSoup(html, "html.parser")
 

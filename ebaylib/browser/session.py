@@ -41,6 +41,7 @@ from ..html.item import parse_item_page, ship_to_location
 from ..html.page_state import PageKind
 from ..html.selectors import Item
 from ..html.srp import parse_search_page
+from ..http.description import fetch_description
 from ..http.fx import convert_cards
 from ..models import Catalog, CatalogItem, CatalogResult, ItemEnded, ItemPage, SrpCard
 from ..urls import ITEMS_PER_PAGE, build_search_url
@@ -50,8 +51,6 @@ logger = logging.getLogger("ebaylib")
 
 _HOME_URL = "https://www.ebay.com/"
 _ITEM_URL = "https://www.ebay.com/itm/{item_id}"
-_DESC_FRAME_HOST = "ebaydesc.com"
-DESC_TIMEOUT_S = 30.0  # iframe описания грузится лениво и медленно — 15с не хватало (≈60/76 таймаутов)
 PAGE_DELAY_S = 0.5   # фикс. пауза перед каждым replacement-запросом новой страницы
 MAX_PAGES = 5        # лимит страниц выдачи на запрос (дефолт fetch_catalog)
 ZIP_SET_ATTEMPTS = 5  # попыток setter-визита закрепить ZIP (свежая сессия: 1–2 хватает)
@@ -284,11 +283,11 @@ class EbaySession:
     # ---------------------------------------------------------------- item
 
     async def fetch_item(
-        self, item_id: str, *, zip: str, desc_timeout_s: float = DESC_TIMEOUT_S,
-        prof=None,
+        self, item_id: str, *, zip: str, prof=None,
     ) -> ItemPage | ItemEnded:
-        """Страница товара → ``ItemPage`` (основной HTML + iframe-описание)
-        либо ``ItemEnded`` (листинг завершён — бейдж ENDED, данных нет).
+        """Страница товара → ``ItemPage`` (основной HTML из браузера + описание
+        отдельным HTTP-запросом) либо ``ItemEnded`` (листинг завершён — бейдж
+        ENDED, данных нет).
 
         Завершённость проверяется ПЕРВОЙ, до ZIP-сверки (на ended ZIP не
         ставится, доставки нет): готовность ждёт «бейдж ended ИЛИ цена» —
@@ -303,10 +302,14 @@ class EbaySession:
         мискматч → ParseError. Стационарно — ноль лишних навигаций. См.
         specs/item_flow.md.
 
+        Описание берётся ОТДЕЛЬНЫМ HTTP-запросом по item_id (fetch_description,
+        itm.ebaydesc.com) — не из браузера: в iframe оно рендерится лениво и
+        эрратично. Сырой HTML описания отдаётся в parse_item_page.
+
         Блокировка/смерть страницы лечится внутри (замена + повтор товара
         целиком, включая ZIP-флоу). Критические: ParseError (поля,
-        ship_to_location), TimeoutError (Pardon/якоря/iframe-описание),
-        Error Page."""
+        ship_to_location), TimeoutError (Pardon/якоря), Error Page, сбой
+        fetch_description (HTTP)."""
         expected = f"{zip},USA"
 
         async def open_item(page) -> tuple[bool, str | None]:
@@ -360,30 +363,11 @@ class EbaySession:
                     return ItemEnded(item_number=item_id)
                 actual = ship_to_location(main_html)
 
+            # Описание — отдельным HTTP-запросом по item_id (мимо браузера),
+            # см. http/description.fetch_description.
             _mark(prof, "desc")
-            description_html = await _description_html(page, desc_timeout_s)
+            description_html = await fetch_description(item_id)
             _mark(prof, "parse")
             return parse_item_page(main_html, description_html)
 
         return await self._run(one_item, what=f"item {item_id}", prof=prof)
-
-
-async def _description_html(page, timeout_s: float) -> str:
-    """HTML iframe-описания. Тег #desc_ifr уже в DOM (гарантировано готовностью),
-    но документ фрейма ЛЕНИВЫЙ — eBay начинает грузить его только при попадании
-    iframe во viewport (подтверждено live: без скролла не грузится вовсе),
-    поэтому сперва скроллим к нему. Затем ждём фрейм с host ebaydesc.com +
-    domcontentloaded. Нет за таймаут → TimeoutError, критично (заменой страницы
-    не лечим: медленный-но-живой прокси — сигнал чинить пул воркера)."""
-    await page.locator("#desc_ifr").scroll_into_view_if_needed()
-    loop = asyncio.get_event_loop()
-    deadline = loop.time() + timeout_s
-    while loop.time() < deadline:
-        frame = next((f for f in page.frames if _DESC_FRAME_HOST in f.url), None)
-        if frame:
-            await frame.wait_for_load_state(
-                "domcontentloaded", timeout=(deadline - loop.time()) * 1000
-            )
-            return await frame.content()
-        await page.wait_for_timeout(300)
-    raise TimeoutError(f"description iframe not loaded at {page.url}")
