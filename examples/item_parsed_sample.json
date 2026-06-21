@@ -1,0 +1,22 @@
+{
+  "_NOTE": "Пример распарсенного товара (JSON-first из modules). Доставка геозависима: в v1 не парсится (берётся из каталога), здесь shipping_raw — сырьё с гео запроса.",
+  "item_number": "277574984378",
+  "title": "A1 Mercury Quicksilver 8M0082537 Throttle/Shift Cable 14ft OEM New Boat Parts",
+  "condition": "new",
+  "price_usd": 47.5,
+  "shipping_raw": "Done Shop with confidence for things you love from sellers worldwide. Includes detailed tracking and hassle-free returns.   Learn more Shipping: US $27.58  (approx 581.80 CZK)   eBay International Shipping .  See details Located in: Crystal River, FL, United States",
+  "seller": "fltoolbox",
+  "location": "Crystal River, FL, United States",
+  "specifics": {
+    "Condition": "New: A brand-new, unused, unopened, undamaged item in its original packaging (where packaging is applicable). Packaging should be the same as what is found in a retail store, unless the item was packaged by the manufacturer in non-retail packaging, such as an unprinted box or plastic bag. See the seller's listing for full details.",
+    "Brand": "Mercury",
+    "Manufacturer Part Number": "8M0082537",
+    "Country of Origin": "United States"
+  },
+  "image_urls": [
+    "https://i.ebayimg.com/images/g/hGEAAeSwXbVpPOLY/s-l1600.jpg",
+    "https://i.ebayimg.com/images/g/O28AAeSwNFxpPOLT/s-l1600.jpg",
+    "https://i.ebayimg.com/images/g/AGwAAeSwvthpPOLS/s-l1600.jpg"
+  ],
+  "description": "eBay\nA1 Mercury Quicksilver 8M0082537 Throttle/Shift Cable 14ft OEM New Boat Parts\nProfessionally packaged and shipped out fast"
+}
