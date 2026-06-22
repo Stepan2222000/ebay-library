@@ -36,3 +36,9 @@ class ErrorPageError(Exception):
 class TransportError(Exception):
     """HTTP-транспорт товара исчерпал ретраи транзиента (сеть/таймаут/503) либо вернул
     неожиданный статус. Критическая — воркер умирает (SPEC.md §7.1/§7.2)."""
+
+
+class PardonError(Exception):
+    """Антибот-challenge «Pardon Our Interruption» на in-page fetch (каталог). НЕ
+    критическая: лечится reload-ом упавшего URL + повтором (SPEC.md §7.3). Контур
+    восстановления — этап 8; на этапе 7 просто летит наружу."""
