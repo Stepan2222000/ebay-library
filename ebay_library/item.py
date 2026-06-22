@@ -16,12 +16,21 @@ from .http.fetch import fetch_description, fetch_item
 from .models import ItemPage
 
 
-async def fetch_item_page(session: AsyncSession, item_id: str) -> ItemPage:
+async def fetch_item_page(session: AsyncSession, item_id: str, *, prof=None) -> ItemPage:
     """``item_id`` → ``ItemPage`` (Mode 1: без цены/доставки — из каталога, SPEC.md §4.4).
 
     Порядок (SPEC.md §4.2): основной HTML (``fetch_item``) → описание отдельным
     запросом (``fetch_description``, §4.5) → парс из JSON-модели (§4.3). Сбой любого
-    из шагов критичен (по жёсткому) — летит наружу."""
+    из шагов критичен (по жёсткому) — летит наружу.
+
+    ``prof`` (опц.) — поэтапный профайлер с методом ``switch(name)``: отмечает стадии
+    ``fetch`` / ``desc`` / ``parse`` (worker.StageTimer, этап 6)."""
+    if prof is not None:
+        prof.switch("fetch")
     html = await fetch_item(session, item_id)
+    if prof is not None:
+        prof.switch("desc")
     description_html = await fetch_description(session, item_id)
+    if prof is not None:
+        prof.switch("parse")
     return parse_item_page(html, description_html)
