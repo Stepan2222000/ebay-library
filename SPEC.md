@@ -553,10 +553,14 @@ matching fewer words» ИЛИ достигнут кап страниц; **дед
 **Правим** (не копируем как есть):
 - **модель товара `ItemPage`**: `price_usd` → опционально (`float | None`), т.к. в
   Mode 1 не заполняется (раздел 7.4);
-- **клиент хранилища и серверные функции `ebay_data`**: `apply_item_snapshot`
-  перестаёт писать `price_usd`/`shipping_cost` (Mode 1), а цену листинга начинает
-  писать `apply_catalog_fetch` (доставка уже пишется в `item_shipping`); владение —
-  раздел 2.3.
+- **серверная функция `ebay_data.apply_item_snapshot`**: перестаёт писать
+  `price_usd` и `item_shipping` (Mode 1) — каталог **уже** ими владеет (цена — через
+  флаг `srp_updates_item`, доставка — `item_shipping`), так что меняем только item-side
+  (как там же уже не пишется `image_url`). Применено на проде, проверено в ROLLBACK.
+  Mode 2 вернёт price/shipping сюда. Владение — раздел 2.3.
+- **store-клиент** (`store.py`): на **asyncpg-пуле** (N параллельных писателей);
+  `apply_item` шлёт payload **без `price_usd`/`shipping_cost`**; `apply_catalog` без
+  изменений.
 
 **Переписываем заново:**
 - парсер товара → **JSON-first из `modules`** (раздел 4.3) вместо DOM;
