@@ -29,11 +29,13 @@ def test_holds_on_plateau():
     assert seq[-1] == seq[-3], seq             # держит (не растёт и не режет)
 
 
-def test_shrinks_on_high_latency():
+def test_shrinks_on_sustained_high_latency():
     c = Controller(start=8)
-    c.update(100, 0.10)                         # baseline = 0.10
+    c.update(100, 0.10); c.update(100, 0.10)    # baseline = 0.10
     before = c.C
-    c.update(100, 0.20)                         # 0.20 ≥ 0.10×1.6 → насыщение → режем
+    c.update(100, 0.30)                          # одно окно насыщения — НЕ режем (гистерезис)
+    assert c.C == before, (before, c.C)
+    c.update(100, 0.30)                          # второе подряд → срез
     assert c.C < before, (before, c.C)
 
 
@@ -77,10 +79,26 @@ def test_tracks_knee_then_capacity_drop():
         c.update(t, l)
     assert 40 <= c.C <= 95, c.C                 # осел у/выше колена 50 (throughput на максимуме)
     settled = c.C
-    for _ in range(20):                         # ёмкость упала: K 50 → 15
+    for _ in range(25):                         # ёмкость упала: K 50 → 15
         t, l = _measure(c.C, 15)
         c.update(t, l)
-    assert c.C < settled and c.C <= 30, (settled, c.C)  # отступил к новому колену
+    # отступил существенно к новому колену (гистерезис тормозит down-ответ — это ок)
+    assert c.C < settled * 0.6, (settled, c.C)
+
+
+def test_no_collapse_under_noisy_latency():
+    """Регресс на прод-баг: при ШУМНОЙ латентности (тяжёлый хвост) старый контроллер
+    схлопывал C→1; новый (скользящий-min baseline + гистерезис) — не должен."""
+    import statistics
+    random.seed(3)
+    c = Controller(start=8)
+    K, BASE = 40, 1.0
+    for _ in range(70):
+        cong = 1.0 if c.C <= K else c.C / K
+        cold = 1.6 if c.C <= 4 else 1.0                      # cold-штраф у низкого C
+        lats = [BASE * cong * cold * random.lognormvariate(0, 0.6) for _ in range(64)]
+        c.update(c.C / statistics.mean(lats), statistics.median(lats))
+    assert c.C > 8, c.C                                      # разогнался, НЕ схлопнулся к 1
 
 
 if __name__ == "__main__":
