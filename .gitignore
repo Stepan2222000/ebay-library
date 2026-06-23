@@ -1,3 +1,4 @@
+_archive/
 *.egg-info/
 *.pyc
 .DS_Store

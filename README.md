@@ -1,110 +1,144 @@
-# ebay-library
+# ebay_library
 
-Библиотека воркера для парсинга eBay: каталог (SRP), страницы товаров (PDP),
-фото, запись результатов в БД `ebay_data` и готовый цикл «задача → парсинг →
-запись → подтверждение». Оркестрация (пул воркеров, браузер/прокси, очередь
-задач) — вне библиотеки: воркер отдаёт три колбека, библиотека делает
-остальное.
+Библиотека воркера для парсинга eBay (Mode 1): товары (PDP) и каталог (SRP), запись
+результатов в БД `ebay_data`, готовый цикл «задача → парсинг → запись → подтверждение».
+Оркестрация (пул воркеров, очередь задач, переотдача, браузер/прокси) — **вне
+библиотеки**: воркер принимает колбэки `next_task` / `task_done` (и для каталога —
+`get_page`), всё остальное делает сам.
+
+Два независимых лейна:
+
+- **item** — `run_item_worker`. Тянет товары с `itm.ebaydesc.com` напрямую (`curl_cffi`),
+  **без браузера**, JSON-first парсинг встроенной модели страницы.
+- **каталог** — `run_catalog_worker`. Запрашивает страницы выдачи `fetch`-ом изнутри
+  прогретой браузерной страницы (in-page fetch), парсит DOM (`lxml`), конвертирует
+  цены в USD через fx-микросервис.
 
 ## Установка
 
 ```bash
-pip install git+https://github.com/Stepan2222000/ebay-library.git
+pip install ebay-library            # имя дистрибутива; импорт — import ebay_library
 ```
 
-Python 3.11+. Браузер поднимает воркер — любой Playwright-совместимый;
+Python 3.11+. Зависимости: `curl_cffi`, `httpx`, `lxml`, `beautifulsoup4`, `asyncpg`.
+Для **каталога** нужен Playwright-совместимый браузер (страницы отдаёт ваш `get_page`);
 рекомендуется CloakBrowser (`pip install cloakbrowser`) или реальный Chrome
-(`channel="chrome"`): eBay отдаёт им каноническую вёрстку.
+(`channel="chrome"`) — eBay отдаёт им каноническую вёрстку. item-лейну браузер не нужен.
 
-## Воркер целиком
+## Публичный API
+
+```python
+import ebay_library
+# воркеры:    run_item_worker, run_catalog_worker
+# хранилище:  Store
+# исключения: ParseError, TransportError, ErrorPageError, AccessDeniedError
+# модели:     ItemPage, ItemEnded, SrpCard, CatalogItem, SearchPage, Catalog, CatalogResult
+```
+
+### Воркеры
+
+```python
+async def run_item_worker(next_task, task_done, store, *, zip="19701") -> None
+async def run_catalog_worker(get_page, next_task, task_done, store, *, zip="19701") -> None
+```
+
+Оба **перманентные**: крутятся, пока не критическая ошибка (исключение наружу) или отмена
+корутины. У воркеров есть и параметры конкуренции (`start_c`, `window`, `max_window_s`,
+`ceiling`, `idle_s`) — но они **внутренние/предварительные, передавать их НЕ нужно**:
+используйте значения по умолчанию (конкуренция адаптивная, подбирается сама).
+
+### Колбэки оркестратора
+
+- **`next_task()`** — `async`, **потокобезопасна** (зовётся параллельно потребителями),
+  отдаёт **одну** задачу или `None` (= задач сейчас нет → воркер ждёт, не завершается):
+
+  ```python
+  # item:
+  {"item_id": "277574984378"}
+  # каталог (батч артикулов с общими фильтрами):
+  {"articles": ["805079T", "805079"], "condition": "new", "min_price": 50, "max_price": 500}
+  ```
+
+- **`task_done(task, stats)`** — `async`, вызывается **строго после записи** в БД
+  (`обработана = записана`). `stats` — словарь со статистикой записи и таймингами.
+- **`get_page()`** — `async`, **только каталог**: отдаёт свежую прогреваемую браузерную
+  страницу (новый контекст/прокси). Зовётся на старте и на каждый swap при Access Denied.
+
+### Минимальный пример — item-лейн (без браузера)
 
 ```python
 import asyncio
-from cloakbrowser import launch_async
-from ebaylib import Store, run_worker
+from ebay_library import Store, run_item_worker
 
 async def main():
-    browser = await launch_async(headless=False)
-    state = {"ctx": None}
+    store = Store()                          # asyncpg-пул к ebay_data
 
-    async def get_page():                 # свежая страница по запросу сессии
-        if state["ctx"]:
-            await state["ctx"].close()    # старые страницы утилизирует воркер
-        state["ctx"] = await browser.new_context()
-        return await state["ctx"].new_page()
+    async def next_task():
+        return await my_queue.take()         # {"item_id": "..."} или None
 
-    async def next_task():                # источник задач: HTTP/Redis/файл…
-        return await my_queue.take()      # None → штатное завершение
+    async def task_done(task, stats):
+        await my_queue.ack(task, stats)       # строго после записи
 
-    async def task_done(task, stats):     # строго ПОСЛЕ записи в БД
-        # stats = {"db": <статистика записи>,
-        #          "timing": {"started_at", "parse_ms", "write_ms", "total_ms"}}
-        await my_queue.ack(task, stats)
-
-    await run_worker(get_page, next_task, Store(), task_done=task_done)
+    await run_item_worker(next_task, task_done, store)   # параметры — по умолчанию
 
 asyncio.run(main())
 ```
 
-Формат задач (всё вне `params` — метаданные оркестратора, едут в `task_done`
-как есть):
-
-```json
-{"type": "catalog", "params": {"articles": ["805079T", "805079"],
-                               "zip": "19701", "condition": "new",
-                               "min_price": 50, "max_price": 500}}
-{"type": "item",    "params": {"item_id": "277574984378", "zip": "19701"}}
-```
-
-Контракт жёсткий: **задача = парсинг + запись**; `task_done` вызывается
-только после фактической записи (`обработана = записана`). Любая ошибка валит
-воркер целиком — незаписанные задачи (без `task_done`) переотдаёт оркестратор,
-повторная запись идемпотентна. Блокировки eBay и смерть страницы воркера НЕ
-валят: сессия сама берёт новую страницу через `get_page` и продолжает с того
-же места.
-
-## Парсинг без БД (EbaySession)
+### Минимальный пример — каталог-лейн (с браузером)
 
 ```python
-from ebaylib import EbaySession, fetch_images
+import asyncio
+from cloakbrowser import launch_async
+from ebay_library import Store, run_catalog_worker
 
-session = EbaySession(get_page)
+async def main():
+    browser = await launch_async(headless=False)
+    store = Store()
 
-res = await session.fetch_catalog(["805079T", "805079"], zip="19701")
-res.items                      # все уникальные карточки (CatalogItem, USD)
-res.per_query["805079"]        # Catalog по конкретному артикулу
+    async def get_page():                    # свежая страница; прокси задаёте контекстом
+        ctx = await browser.new_context(proxy={"server": "http://…", "username": "…", "password": "…"})
+        return await ctx.new_page()           # прогрев делает сам воркер
 
-item = await session.fetch_item("277574984378", zip="19701")
-photos = await fetch_images(item.image_urls)   # list[bytes], порядок сохранён
+    async def next_task():
+        return await my_queue.take()          # {"articles": [...], "condition": "new"} или None
+
+    async def task_done(task, stats):
+        await my_queue.ack(task, stats)
+
+    await run_catalog_worker(get_page, next_task, task_done, store)   # параметры — по умолчанию
+
+asyncio.run(main())
 ```
-
-`zip` обязателен у item (локация сессионная, ставится setter-визитом SRP и
-сверяется по `shipToLocation`) и практически обязателен у каталога (без него
-доставка не рендерится). Выдача обходится до 5 страниц на запрос
-(`max_pages`), цены/доставка конвертируются в USD через fx-микросервис
-(`FX_API_URL`) одним батчем на каталог.
 
 ## Запись в ebay_data
 
-`Store` — тонкий asyncpg-клиент серверного API БД (`apply_catalog_fetch` /
-`apply_item_snapshot`): апсерты, диффы, журнал изменений и death/resurrection
-делает сама БД (проект `ebay_data`, `db/schema.sql`). DSN — env
-`EBAY_DATA_DSN` (дефолт захардкожен); pgbouncer подключается заменой DSN.
-`Store.apply_catalog`/`apply_item` можно звать и без `run_worker`.
+`Store` — тонкий asyncpg-клиент серверного API БД: апсерты, диффы, журнал изменений и
+death/resurrection делает сама БД (проект `ebay_data`). Можно звать и без воркера:
 
-## Ошибки
+```python
+store = Store(dsn=...)                        # дефолт DSN в коде; env EBAY_DATA_DSN
+await store.apply_item(item, zip="19701")     # PDP-снапшот (без цены/доставки — Mode 1)
+await store.apply_catalog(article, catalog, zip="19701", condition="new")
+await store.close()
+```
 
-Наружу летят только критические (воркер умирает, задача переотдаётся):
-`ParseError` (обязательное поле не выбито; несёт сырой HTML), `ErrorPageError`
-(«Error Page | eBay»), `TaskFormatError` (кривая задача), таймауты
-(Pardon/якоря/iframe). `AccessDeniedError` наружу не доходит — лечится
-заменой страницы внутри. Диагностика — логгер `"ebaylib"` (INFO — замены
-страниц с причиной, DEBUG — прогресс).
+**Владение полями (важно):** цену в USD и доставку пишет **каталог**; title/condition/
+location/seller/specifics/фото/описание — **item**. В Mode 1 item цену/доставку не пишет.
+
+## Политика ошибок («по жёсткому»)
+
+Наружу летят только **критические** — воркер умирает, незаписанные задачи (без
+`task_done`) оркестратор переотдаёт, повторная запись идемпотентна:
+
+- `ParseError` — обязательное поле не выбито (вёрстка/модель уехали; несёт сырьё);
+- `TransportError` — item-транспорт исчерпал ретраи или неожиданный статус;
+- `ErrorPageError` — «Error Page | eBay»; транспортная смерть браузерной вкладки.
+
+`AccessDeniedError` наружу **не доходит** — это смерть страницы, каталог-сессия сама
+берёт новую через `get_page` и продолжает с того же места (Pardon — повторный прогрев).
+Транзиент (сеть/`503`/таймаут) — ретраится. Логгер — `"ebay_library"`.
 
 ## Документация
 
-Архитектура, контракты потоков и селекторы — в [`specs/`](specs/):
-[architecture](specs/architecture.md) ·
-[catalog_flow](specs/catalog_flow.md) ·
-[item_flow](specs/item_flow.md) ·
-[page_readiness](specs/page_readiness.md)
+Дизайн и контракты — [`../SPEC.md`](../SPEC.md); порядок сборки — [`../PLAN.md`](../PLAN.md);
+точные пути JSON-полей товара — [`../examples/README.md`](../examples/README.md).
