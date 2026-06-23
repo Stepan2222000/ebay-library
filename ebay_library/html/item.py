@@ -42,6 +42,10 @@ _LAST_UPD_RE = re.compile(r"Last updated on\s*(.+?)$")
 # schema.org itemCondition → наша модель {new|other|None}
 _CONDITION = {"NewCondition": "new"}
 
+# Якорные разделы основной модели товара — есть ТОЛЬКО в ней; у рекламных
+# MERCH_PLACEMENT-модулей их нет. По ним выбираем объект "modules" (см. _main_modules).
+_ANCHOR_MODULES = ("ITEM_SPEC_SUMMARY", "JSONLD", "TITLE", "PICTURE", "BUY_BOX")
+
 
 def _balanced(s: str, start: int) -> str | None:
     """Сбалансированный объект ``{...}`` от позиции ``start`` (учёт строк/экранов)."""
@@ -68,19 +72,36 @@ def _balanced(s: str, start: int) -> str | None:
     return None
 
 
-def _largest_modules(html: str) -> dict:
-    """Самый крупный объект ``"modules":{...}`` страницы → JSON (основная модель)."""
+def _main_modules(html: str) -> dict:
+    """Основная модель товара = объект ``"modules":{...}`` с ЯКОРНЫМИ разделами.
+
+    Выбираем по числу якорей (``_ANCHOR_MODULES``), а НЕ по размеру: на impersonate-
+    версии страницы рекламный ``MERCH_PLACEMENT``-модуль бывает 136КБ и обгоняет
+    модель по длине → выбор «самый длинный» брал рекламу → ParseError. Якоря есть
+    только в модели. Проверено живьём 2026-06-22 (659 листингов, 100%).
+
+    ⚠️ ПРЕДВАРИТЕЛЬНО: завязано на ИМЕНА разделов eBay; если их переименуют — score
+    станет 0 у всех объектов → ParseError (громко, сразу заметим). На used/вариативных
+    листингах и ещё бо́льшем объёме не проверено."""
     best = None
+    best_score = 0
     for m in _MODULES_RE.finditer(html):
         obj = _balanced(html, html.index("{", m.start() + 9))
-        if obj and (best is None or len(obj) > len(best)):
-            best = obj
-    if best is None:
+        if not obj:
+            continue
+        # дешёвый предфильтр по подстроке — не json.loads-им рекламу зря
+        score = sum(1 for k in _ANCHOR_MODULES if f'"{k}"' in obj)
+        if score <= best_score:
+            continue
+        try:
+            d = json.loads(obj)
+        except ValueError:
+            continue
+        best = d
+        best_score = score
+    if best is None or best_score == 0:
         raise ParseError("modules", None, None, html)
-    try:
-        return json.loads(best)
-    except ValueError:
-        raise ParseError("modules", None, None, html) from None
+    return best
 
 
 def _dig(obj, *keys, field: str, item_number: str | None, html: str):
@@ -136,7 +157,7 @@ def parse_item_page(html: str, description_html: str | None = None) -> ItemPage:
     Карта путей — в шапке модуля и examples/README.md (раздел 1). ``ParseError`` на
     отсутствии обязательного поля. ``description_html`` (опц.) — сырой HTML описания
     (http/description): передан — извлекаем текст, нет — ``description = ""``."""
-    m = _largest_modules(html)
+    m = _main_modules(html)
 
     # item_number: ITEM_SPEC_SUMMARY.sections.itemId.dataItems.itemId.textSpans[1] (цифры)
     iid_spans = _dig(m, "ITEM_SPEC_SUMMARY", "sections", "itemId", "dataItems",
