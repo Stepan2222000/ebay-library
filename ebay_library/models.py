@@ -27,7 +27,7 @@ class SrpCard:
     price: float               # сумма в исходной валюте
     currency_raw: str          # валютный токен как на сайте ('$','US $','C $','EUR'…)
     shipping_cost: float | None  # исходная валюта; 0.0 = Free; None = not specified/самовывоз/freight
-    seller: str
+    seller: str | None         # ⚠️⚠️ ВРЕМЕННО None (рекламные карточки без seller в сыром HTML — srp.py); ПОД БОЛЬШИМ ВОПРОСОМ
     location: str | None       # из "Located in <...>"; eBay рендерит лениво/не всегда
     image_url: str
 
@@ -44,7 +44,7 @@ class CatalogItem:
     condition: str | None   # "new" | "other"; None — карточка без состояния
     price: float            # в USD
     shipping_cost: float | None  # в USD; 0.0 = Free; None = не указана/самовывоз/freight
-    seller: str
+    seller: str | None      # ⚠️⚠️ ВРЕМЕННО None (рекламные карточки — srp.py); ПОД БОЛЬШИМ ВОПРОСОМ
     location: str | None    # из "Located in <...>"; None допустим (lazy-рендер)
     image_url: str
 

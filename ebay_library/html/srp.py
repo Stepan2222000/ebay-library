@@ -1,9 +1,14 @@
 """Слой 1 — парсинг страницы выдачи eBay (SRP). Чистая функция HTML → данные.
 
-Скопировано из старого ``ebaylib`` (SPEC.md §12: каталог парсим из DOM). Селекторы —
-selectors.Srp, нормализации — normalize. Детект «что за страница» сюда НЕ дублируется:
-caller сперва классифицирует тело (page_state) и зовёт parse_search_page только для
-SRP. Здесь — только разбор результата.
+Каталог парсим из DOM (SPEC.md §12). Селекторы — selectors.Srp, нормализации —
+normalize. Детект «что за страница» сюда НЕ дублируется: caller сперва классифицирует
+тело (page_state) и зовёт parse_search_page только для SRP. Здесь — только разбор.
+
+Парсер — **lxml** (`lxml.html` + cssselect), не BeautifulSoup: SRP-страницы огромные
+(медиана ~3МБ), bs4(html.parser) парсит ~206мс и держит GIL → потолок ~3.6 стр/сек на
+процесс, что упирало throughput каталога. lxml жуёт ту же страницу за ~32мс (~12×).
+Эквивалентность bs4↔lxml проверена живьём — 0 расхождений по всем полям на 12607
+карточках (этап 9). ``_txt`` мимикрирует ``bs4.get_text(separator, strip=True)``.
 
 Все поля обязательны: любая нестыковка → ParseError наружу (с сырьём), весь парс
 страницы падает. «0 results» — это валидный SearchPage(items=[]), не ошибка.
@@ -13,7 +18,7 @@ from __future__ import annotations
 
 import re
 
-from bs4 import BeautifulSoup
+import lxml.html
 
 from ..errors import ParseError
 from ..models import SearchPage, SrpCard
@@ -44,14 +49,27 @@ def _to_float(amount: str) -> float:
     return float(amount.replace(",", ""))
 
 
-def _parse_card(card) -> SrpCard:
-    item_id = card.get("data-listingid", "")
-    raw_html = str(card)
+def _txt(el, sep: str = "") -> str:
+    """Текст узла как ``bs4.get_text(separator=sep, strip=True)``: стрипнутые
+    непустые фрагменты, склеенные ``sep`` (по умолчанию "" — как у bs4)."""
+    if el is None:
+        return ""
+    return sep.join(s.strip() for s in el.itertext() if s.strip())
 
-    t = card.select_one(Srp.CARD_TITLE)
-    if not t or not t.get_text(strip=True):
+
+def _one(el, sel):
+    """``select_one``: первый совпавший элемент или None."""
+    found = el.cssselect(sel)
+    return found[0] if found else None
+
+
+def _parse_card(card) -> SrpCard:
+    item_id = card.get("data-listingid") or ""
+    raw_html = lxml.html.tostring(card, encoding="unicode")
+
+    title = _txt(_one(card, Srp.CARD_TITLE))
+    if not title:
         raise ParseError("title", None, item_id, raw_html)
-    title = t.get_text(strip=True)
     if title.endswith(_TITLE_SUFFIX):
         title = title[: -len(_TITLE_SUFFIX)].strip()
 
@@ -61,14 +79,14 @@ def _parse_card(card) -> SrpCard:
     # карточек eBay не рисует его вовсе (подтверждено live 2026-06-10,
     # напр. 400448473243 в выдаче '805079') — None, не ошибка.
     condition = None
-    for sp in card.select(Srp.CARD_SUBTITLE_SPANS):
-        txt = sp.get_text(strip=True)
+    for sp in card.cssselect(Srp.CARD_SUBTITLE_SPANS):
+        txt = _txt(sp)
         if txt.lower() in KNOWN_CONDITIONS:
             condition = normalize_condition(txt)
             break
 
-    pe = card.select_one(Srp.CARD_PRICE)
-    praw = pe.get_text(" ", strip=True) if pe else None
+    pe = _one(card, Srp.CARD_PRICE)
+    praw = _txt(pe, " ") if pe is not None else None
     if not praw or " to " in praw.lower():
         raise ParseError("price", praw, item_id, raw_html)
     pm = _PRICE_RE.match(re.sub(r"\s+", " ", praw).strip())
@@ -86,7 +104,7 @@ def _parse_card(card) -> SrpCard:
     # 267531699561). Любой другой не-матч — ParseError: вёрстка должна греметь.
     shipping_cost = None
     shipping_matched = False
-    rows = [r.get_text(" ", strip=True) for r in card.select(Srp.CARD_ATTR_ROW)]
+    rows = [_txt(r, " ") for r in card.cssselect(Srp.CARD_ATTR_ROW)]
     for txt in rows:
         if _FREE_RE.match(txt):
             shipping_cost = 0.0
@@ -109,29 +127,33 @@ def _parse_card(card) -> SrpCard:
     # Рейтинг не сохраняем, используем лишь как якорь; ник = до процента.
     seller = None
     for el in (
-        card.select(Srp.CARD_SELLER_BADGE)
-        + card.select(Srp.CARD_SELLER_PRIMARY)
-        + card.select(Srp.CARD_ATTR_ROW)
+        card.cssselect(Srp.CARD_SELLER_BADGE)
+        + card.cssselect(Srp.CARD_SELLER_PRIMARY)
+        + card.cssselect(Srp.CARD_ATTR_ROW)
     ):
-        sm = _SELLER_RE.match(el.get_text(" ", strip=True))
+        sm = _SELLER_RE.match(_txt(el, " "))
         if sm:
             seller = sm.group("seller")
             break
-    if not seller:
-        raise ParseError("seller", None, item_id, raw_html)
+    # ⚠️⚠️ ВРЕМЕННО, ПОД ОЧЕНЬ БОЛЬШИМ ВОПРОСОМ: у части карточек (рекламные/ad) eBay
+    # рендерит продавца через JS — в сыром HTML выдачи его НЕТ (проверено живьём:
+    # маркера рекламы в сыром HTML нет, retry не лечит). Чтобы не падать — оставляем
+    # seller=None; авторитетный продавец дольётся из PDP при merge. НЕ финальное решение.
+    # if not seller:
+    #     raise ParseError("seller", None, item_id, raw_html)
 
     # location опционален: eBay подгружает "Located in" лениво и не всегда
     # (подтверждено live — при выставленном ZIP поле может отсутствовать у всей
     # выдачи). Нет строки → None; точный location берём с item-страницы.
     location = None
-    for r in card.select(Srp.CARD_ATTR_ROW):
-        txt = r.get_text(" ", strip=True)
+    for r in card.cssselect(Srp.CARD_ATTR_ROW):
+        txt = _txt(r, " ")
         if txt.lower().startswith("located in"):
             location = txt[len("Located in"):].strip()
             break
 
-    img = card.select_one(Srp.CARD_IMG)
-    image_url = img.get("src") if img else None
+    img = _one(card, Srp.CARD_IMG)
+    image_url = img.get("src") if img is not None else None
     if not image_url:
         raise ParseError("image_url", None, item_id, raw_html)
 
@@ -152,11 +174,11 @@ def parse_search_page(html: str) -> SearchPage:
     """Парсит HTML страницы выдачи. ParseError, если обязательное поле
     (счётчик результатов или поле карточки) не распарсилось. Caller гарантирует,
     что это SRP (проверено page_state)."""
-    soup = BeautifulSoup(html, "html.parser")
-    heading = soup.select_one(Srp.COUNT_HEADING)
+    doc = lxml.html.fromstring(html)
+    heading = _one(doc, Srp.COUNT_HEADING)
     results_count = None
-    if heading:
-        hm = re.match(r"^([\d,]+)", heading.get_text(strip=True))
+    if heading is not None:
+        hm = re.match(r"^([\d,]+)", _txt(heading))
         if hm:
             results_count = int(hm.group(1).replace(",", ""))
     if results_count is None:
@@ -171,19 +193,20 @@ def parse_search_page(html: str) -> SearchPage:
     # всему документу. Live 2026-06-13: 43881A8 (0 + 240 похожих, сепаратор
     # в river-answer), 09651605 (совсем пусто, сепаратора нет).
     if results_count == 0:
-        sep = any("fewer words" in s.get_text().lower()
-                  for s in soup.select(Srp.FEWER_WORDS_SEP))
+        sep = any("fewer words" in _txt(s).lower()
+                  for s in doc.cssselect(Srp.FEWER_WORDS_SEP))
         return SearchPage(results_count=0, items=[], has_fewer_words_sep=sep)
 
     has_fewer_words_sep = False
     items: list[SrpCard] = []
-    for li in soup.select(Srp.RESULTS_LI):
-        sep = li.select_one(Srp.FEWER_WORDS_SEP)
-        if sep and "fewer words" in sep.get_text().lower():
+    for li in doc.cssselect(Srp.RESULTS_LI):
+        sep = _one(li, Srp.FEWER_WORDS_SEP)
+        if sep is not None and "fewer words" in _txt(sep).lower():
             has_fewer_words_sep = True
             break
-        if "s-card" in li.get("class", []) and li.get("data-listingid"):
-            if len(li.get("data-listingid", "")) != 12:  # placeholder
+        classes = (li.get("class") or "").split()
+        if "s-card" in classes and li.get("data-listingid"):
+            if len(li.get("data-listingid") or "") != 12:  # placeholder
                 continue
             items.append(_parse_card(li))
 

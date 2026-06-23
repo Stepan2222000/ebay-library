@@ -5,14 +5,19 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "ebay-library"
 version = "0.1.0"
-description = "eBay parsing library — методы парсинга каталога и карточек для воркеров"
+description = "eBay parsing worker library — item (ebaydesc, без браузера) + каталог (SRP) лейны, Mode 1"
 requires-python = ">=3.11"
 dependencies = [
     "asyncpg",
     "beautifulsoup4",
+    "curl_cffi",
     "httpx",
-    "playwright",
+    "lxml",
 ]
 
+[project.optional-dependencies]
+# браузер нужен только каталог-лейну (страницы отдаёт get_page); item-лейну — нет
+catalog = ["cloakbrowser"]
+
 [tool.setuptools.packages.find]
-include = ["ebaylib*"]
+include = ["ebay_library*"]
