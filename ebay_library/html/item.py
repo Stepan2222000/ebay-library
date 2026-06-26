@@ -26,12 +26,15 @@ Caller гарантирует, что это НАСТОЯЩИЙ листинг (
 from __future__ import annotations
 
 import json
+import logging
 import re
 
 from bs4 import BeautifulSoup
 
 from ..errors import ParseError
 from ..models import ItemPage
+
+_log = logging.getLogger("ebay_library")
 
 _MODULES_RE = re.compile(r'"modules"\s*:\s*\{')
 _SELLER_RE = re.compile(r'"sellerUserName":"([^"]*)"')
@@ -181,6 +184,35 @@ def _image_urls_from_html(html: str, item_number: str | None = None) -> list[str
     return _image_urls(_main_modules(html), item_number, html)
 
 
+def _availability_status(offers) -> str:
+    """``offers.availability`` → "live"/"ended". schema.org-стандарт: ``InStock`` → live,
+    ``OutOfStock`` (и прочее «нет в наличии») → ended. Неизвестное значение → ended +
+    лог (ловим новые варианты живьём, не падая; решение обсуждено). ``offers`` может быть
+    словарём или списком (берём первый)."""
+    if isinstance(offers, list):
+        offers = offers[0] if offers else {}
+    token = ((offers or {}).get("availability") or "").rsplit("/", 1)[-1]
+    if token == "InStock":
+        return "live"
+    if token != "OutOfStock":
+        _log.warning("unknown availability token %r → ended", token)
+    return "ended"
+
+
+def status_from_html(html: str, item_number: str | None = None) -> tuple[str, bool]:
+    """``(status, has_product)`` из HTML страницы (один сигнал — schema.org ``JSONLD.product``).
+
+    ``has_product=False`` → у страницы нет ``JSONLD.product`` (delisted-каталог/hub): это
+    НЕ листинг, фото на ней чужие (брать из nordt), статус — ``ended`` (делистнут).
+    ``has_product=True`` → настоящий листинг; ``status`` из ``availability`` (live/ended).
+    На странице без модели вообще — ``ParseError`` (``_main_modules``)."""
+    m = _main_modules(html)
+    prod = (m.get("JSONLD") or {}).get("product") if isinstance(m.get("JSONLD"), dict) else None
+    if not isinstance(prod, dict):
+        return ("ended", False)
+    return (_availability_status(prod.get("offers")), True)
+
+
 def parse_item_page(html: str, description_html: str | None = None) -> ItemPage:
     """HTML страницы товара (настоящего листинга) → ``ItemPage``.
 
@@ -208,6 +240,10 @@ def parse_item_page(html: str, description_html: str | None = None) -> ItemPage:
     if isinstance(offers, list):
         offers = offers[0] if offers else {}
     condition = _map_condition((offers or {}).get("itemCondition"))
+
+    # status: availability (InStock → live, иначе ended). parse_item_page вызывается только
+    # на странице с JSONLD.product (live/проданный); delisted сюда не доходит (нет product).
+    status = _availability_status(offers)
 
     # specifics: ABOUT_THIS_ITEM.sections.features.dataItems → {label: значения}.
     # Строку "condition" (boilerplate-определение) исключаем — дубль поля condition.
@@ -263,6 +299,7 @@ def parse_item_page(html: str, description_html: str | None = None) -> ItemPage:
         item_number=item_number,
         title=title,
         condition=condition,
+        status=status,         # live/ended из availability
         price_usd=None,        # Mode 1: цена из каталога (SPEC.md §4.4)
         shipping_cost=None,    # Mode 1: доставка из каталога (SPEC.md §4.4)
         seller=seller,

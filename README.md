@@ -31,7 +31,7 @@ Python 3.11+. Зависимости: `curl_cffi`, `httpx`, `lxml`, `beautifulso
 import ebay_library
 # воркеры:    run_item_worker, run_catalog_worker
 # хранилище:  Store
-# фото:       fetch_photos, Photo, S3Photos, S3Config, fetch_image_urls
+# фото:       fetch_photos, Photo, S3Photos, S3Config, fetch_image_urls, listing_status, PhotoResult
 # исключения: ParseError, TransportError, ErrorPageError, AccessDeniedError
 # модели:     ItemPage, ItemEnded, SrpCard, CatalogItem, SearchPage, Catalog, CatalogResult
 ```
@@ -133,7 +133,8 @@ location/seller/specifics/фото/описание — **item**. В Mode 1 item
 
 ```python
 async def fetch_photos(item_id, count=None, *, store, upload=False, s3=None) -> list[Photo]
-async def fetch_image_urls(item_id) -> list[str]
+async def listing_status(item_id) -> str                 # "live" | "ended"
+async def fetch_image_urls(item_id) -> PhotoResult       # (status, source, urls)
 ```
 
 - **`fetch_photos`** — источник URL = БД (`item_images` по `item_id`, первые `count` по
@@ -142,9 +143,27 @@ async def fetch_image_urls(item_id) -> list[str]
   проставить `s3_key`; в ответе только метаданные (`Photo(idx, ebay_url, url_hash, s3_url,
   uploaded)`). `s3` — переиспользуемый `S3Photos` (дефолт `S3Config` = боевой MinIO, env
   `EBAY_S3_*`); мёртвый листинг при `upload=True` → ошибка. Fail-fast.
-- **`fetch_image_urls`** — ссылки на фото **по `item_id`** напрямую с eBay (один GET
-  `ebaydesc`, без браузера/БД) — для товаров, которых нет у нас в `item_images`. Дальше при
-  желании `fetch_images(urls)` отдаёт байты. ended/404 → `TransportError`.
+
+### Статус листинга и фото по `item_id` (без БД)
+
+Один сигнал — schema.org **`JSONLD.product.offers.availability`** в ответе `ebaydesc`:
+
+| Страница | Сигнал | Статус | Фото |
+|---|---|---|---|
+| live листинг | `product` есть, `availability=InStock` | `live` | ebaydesc |
+| проданный (полная PDP) | `product` есть, `availability=OutOfStock` | `ended` | ebaydesc |
+| делистнут (каталог/hub) | `product` **отсутствует** | `ended` | **nordt** (`?nordt=true` обходит редирект на `/p/`) |
+| удалён | ebaydesc `404` | `ended` | — |
+
+- **`listing_status(item_id)`** — `"live"`/`"ended"` одним дешёвым `ebaydesc`-запросом.
+- **`fetch_image_urls(item_id)`** → `PhotoResult(item_id, status, source, urls)` — статус И
+  **правильные** фото из одного разбора (delisted: `ebaydesc` даёт ЧУЖИЕ фото, поэтому
+  берём оригинал через `nordt`; `www.ebay.com` walled — impersonate+ретрай). Дальше
+  `fetch_images(result.urls)` отдаёт байты. Транзиент/неожиданный статус → `TransportError`.
+
+> Парсер выставляет `ItemPage.status` (live/ended) из того же сигнала. Интеграция статуса
+> в воркер/запись смерти в БД — **отдельный шаг** (нужен доступ к БД и решение по серверным
+> функциям `ebay_data`: `apply_item_snapshot` воскрешает, guard блокирует `s3_key` мёртвым).
 
 ## Политика ошибок («по жёсткому»)
 

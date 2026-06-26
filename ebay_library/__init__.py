@@ -21,7 +21,7 @@ from .errors import (
     ParseError,
     TransportError,
 )
-from .item import fetch_image_urls
+from .item import PhotoResult, fetch_image_urls, listing_status
 from .models import (
     Catalog,
     CatalogItem,
@@ -47,8 +47,10 @@ __all__ = [
     "Photo",
     "S3Photos",
     "S3Config",
-    # ссылки фото по item_id (лёгкий путь, без БД — для товаров без ebay_url у нас)
+    # статус листинга + фото по item_id (ebaydesc/nordt-роутинг, без БД)
+    "listing_status",
     "fetch_image_urls",
+    "PhotoResult",
     # исключения (политика ошибок, SPEC.md §7)
     "ParseError",
     "TransportError",

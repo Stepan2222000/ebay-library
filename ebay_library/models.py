@@ -92,18 +92,23 @@ class ItemEnded:
 class ItemPage:
     """Страница товара (PDP), распарсенная JSON-first (SPEC.md §4.3).
 
-    Обязательны: ``item_number``, ``title``, ``seller``.
+    Обязательны: ``item_number``, ``title``, ``seller``, ``status``.
     Опциональны (SPEC.md §7.4): ``location`` (None — pickup-only листинг без доставки
     либо eBay не отдал "Located in:"), ``specifics`` ({} — продавец не задал своих
     характеристик; в блоке только Condition+Category), ``condition`` (None — состояние не указано),
     ``last_updated`` (None — листинг не редактировали), ``image_urls`` ([] — у
     листинга нет фото). ``price_usd`` и ``shipping_cost`` в **Mode 1 всегда None** —
     не парсим, приходят из каталога (SPEC.md §4.4); заполняются только в Mode 2 (§9).
-    ``description`` — текст с itm.ebaydesc.com ("" — валидно, если пусто)."""
+    ``description`` — текст с itm.ebaydesc.com ("" — валидно, если пусто).
+
+    ``status`` — "live" | "ended" из ``JSONLD.product.offers.availability`` (InStock →
+    live, иначе → ended). Здесь только листинги с полной PDP (live или проданные); страницы
+    БЕЗ ``JSONLD.product`` (delisted-каталог) сюда не доходят — это не ``ItemPage``."""
 
     item_number: str            # eBay item number (цифры)
     title: str                  # чистый (HTML-сущности/теги JSONLD раскодированы)
     condition: str | None       # "new" | "other"; None — состояние не указано
+    status: str                 # "live" | "ended" (availability: InStock → live, иначе ended)
     price_usd: float | None     # Mode 1: None (из каталога); Mode 2: USD
     shipping_cost: float | None  # Mode 1: None (из каталога); Mode 2: USD (0.0 = Free)
     seller: str                 # username продавца (как в каталоге)
