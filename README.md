@@ -31,6 +31,7 @@ Python 3.11+. Зависимости: `curl_cffi`, `httpx`, `lxml`, `beautifulso
 import ebay_library
 # воркеры:    run_item_worker, run_catalog_worker
 # хранилище:  Store
+# фото:       fetch_photos, Photo, S3Photos, S3Config, fetch_image_urls
 # исключения: ParseError, TransportError, ErrorPageError, AccessDeniedError
 # модели:     ItemPage, ItemEnded, SrpCard, CatalogItem, SearchPage, Catalog, CatalogResult
 ```
@@ -124,6 +125,26 @@ await store.close()
 
 **Владение полями (важно):** цену в USD и доставку пишет **каталог**; title/condition/
 location/seller/specifics/фото/описание — **item**. В Mode 1 item цену/доставку не пишет.
+
+## Фото
+
+Парсер пишет в `item_images` только ссылки (`ebay_url`); скачивание и заливка в S3 —
+отдельный шаг (байты в БД не лежат).
+
+```python
+async def fetch_photos(item_id, count=None, *, store, upload=False, s3=None) -> list[Photo]
+async def fetch_image_urls(item_id) -> list[str]
+```
+
+- **`fetch_photos`** — источник URL = БД (`item_images` по `item_id`, первые `count` по
+  `idx`). `upload=False` → вернуть байты (`Photo.content`), БД/S3 не трогать. `upload=True`
+  → недостающие (без `s3_key`) залить в S3 (`{item_id}/{md5}.jpg`, оригинал JPEG) и
+  проставить `s3_key`; в ответе только метаданные (`Photo(idx, ebay_url, url_hash, s3_url,
+  uploaded)`). `s3` — переиспользуемый `S3Photos` (дефолт `S3Config` = боевой MinIO, env
+  `EBAY_S3_*`); мёртвый листинг при `upload=True` → ошибка. Fail-fast.
+- **`fetch_image_urls`** — ссылки на фото **по `item_id`** напрямую с eBay (один GET
+  `ebaydesc`, без браузера/БД) — для товаров, которых нет у нас в `item_images`. Дальше при
+  желании `fetch_images(urls)` отдаёт байты. ended/404 → `TransportError`.
 
 ## Политика ошибок («по жёсткому»)
 

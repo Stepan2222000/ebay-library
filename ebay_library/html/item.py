@@ -151,6 +151,36 @@ def _map_condition(item_condition: str | None) -> str | None:
     return _CONDITION.get(item_condition.rsplit("/", 1)[-1], "other")
 
 
+def _image_urls(m: dict, item_number: str | None, html: str) -> list[str]:
+    """Ссылки фото из модели: ``PICTURE.mediaList[].image.originalImg.URL`` (→ s-l1600,
+    дедуп). Нет ``mediaList`` → ``[]`` (товар реально без фото). Есть ``mediaList``, но ни
+    одного URL → ``ParseError``. Не из ``JSONLD.image`` (тот обрезан до 5).
+
+    Единственное место извлечения фото — зовётся и полным ``parse_item_page``, и лёгким
+    ``_image_urls_from_html`` (нет дублирования)."""
+    picture = _dig(m, "PICTURE", field="image_urls", item_number=item_number, html=html)
+    media = picture.get("mediaList") if isinstance(picture, dict) else None
+    image_urls: list[str] = []
+    if media is not None:
+        seen: set[str] = set()
+        for x in media:
+            u = (((x.get("image") or {}).get("originalImg") or {}).get("URL"))
+            if u:
+                u = _SIZE_TOKEN_RE.sub("s-l1600", u)
+                if u not in seen:
+                    seen.add(u)
+                    image_urls.append(u)
+        if media and not image_urls:
+            raise ParseError("image_urls", None, item_number, html)
+    return image_urls
+
+
+def _image_urls_from_html(html: str, item_number: str | None = None) -> list[str]:
+    """Лёгкий путь html → ссылки фото: выбор модели (``_main_modules``) + ``PICTURE``
+    (``_image_urls``). Без разбора прочих полей — для ``fetch_image_urls`` (фото по id)."""
+    return _image_urls(_main_modules(html), item_number, html)
+
+
 def parse_item_page(html: str, description_html: str | None = None) -> ItemPage:
     """HTML страницы товара (настоящего листинга) → ``ItemPage``.
 
@@ -192,8 +222,10 @@ def parse_item_page(html: str, description_html: str | None = None) -> ItemPage:
             if not labels:
                 continue
             specifics[labels[0]] = " ".join(_spans(v.get("values"), skip_action=True)).strip()
-    if not specifics:
-        raise ParseError("specifics", None, item_number, html)
+    # Пустой specifics — валидно: листинг без пользовательских спецификаций (в блоке
+    # "Item specifics" только Condition + Category, своих полей продавец не задал).
+    # Поймано живьём (16 листингов). Структура features.dataItems всё равно обязательна
+    # (_dig выше) — product-hub-страницы без ABOUT_THIS_ITEM по-прежнему падают.
 
     # location: SHIPPING_ATF_SECTION_MODULE.sections.shipping.dataItems → спан "Located in:"
     ship_di = _dig(m, "SHIPPING_ATF_SECTION_MODULE", "sections", "shipping", "dataItems",
@@ -203,8 +235,9 @@ def parse_item_page(html: str, description_html: str | None = None) -> ItemPage:
         if t.strip().lower().startswith("located in"):
             location = _LOC_PREFIX_RE.sub("", t.strip()).strip()
             break
-    if not location:
-        raise ParseError("location", None, item_number, html)
+    # location=None — валидно: pickup-only листинги (Pickup/Local pickup only, доставки
+    # нет) и часть доставляемых, где eBay не отдал спан "Located in:". Поймано живьём (6
+    # листингов). Структура shipping.dataItems всё равно обязательна (_dig выше).
 
     # seller: "sellerUserName" по полному HTML (вне modules) — username, как в каталоге
     sm = _SELLER_RE.search(html)
@@ -212,22 +245,9 @@ def parse_item_page(html: str, description_html: str | None = None) -> ItemPage:
     if not seller:
         raise ParseError("seller", None, item_number, html)
 
-    # image_urls: PICTURE.mediaList[].image.originalImg.URL (→ s-l1600, дедуп). Нет
-    # mediaList → [] (товар реально без фото). Не из JSONLD.image (тот обрезан до 5).
-    picture = _dig(m, "PICTURE", field="image_urls", item_number=item_number, html=html)
-    media = picture.get("mediaList") if isinstance(picture, dict) else None
-    image_urls: list[str] = []
-    if media is not None:
-        seen: set[str] = set()
-        for x in media:
-            u = (((x.get("image") or {}).get("originalImg") or {}).get("URL"))
-            if u:
-                u = _SIZE_TOKEN_RE.sub("s-l1600", u)
-                if u not in seen:
-                    seen.add(u)
-                    image_urls.append(u)
-        if media and not image_urls:
-            raise ParseError("image_urls", None, item_number, html)
+    # image_urls: вынесено в _image_urls (общий код с лёгким _image_urls_from_html).
+    # [] — листинг без фото; есть mediaList без URL → ParseError (внутри хелпера).
+    image_urls = _image_urls(m, item_number, html)
 
     # last_updated (опционально): ITEM_SPEC_SUMMARY.sections.revisionHistory
     last_updated = None

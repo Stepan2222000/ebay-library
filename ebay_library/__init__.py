@@ -21,6 +21,7 @@ from .errors import (
     ParseError,
     TransportError,
 )
+from .item import fetch_image_urls
 from .models import (
     Catalog,
     CatalogItem,
@@ -30,6 +31,8 @@ from .models import (
     SearchPage,
     SrpCard,
 )
+from .photos import Photo, fetch_photos
+from .s3 import S3Config, S3Photos
 from .store import Store
 from .worker import run_catalog_worker, run_item_worker
 
@@ -39,6 +42,13 @@ __all__ = [
     "run_catalog_worker",
     # хранилище
     "Store",
+    # фото (скачивание + опц. заливка в S3 и запись s3_key)
+    "fetch_photos",
+    "Photo",
+    "S3Photos",
+    "S3Config",
+    # ссылки фото по item_id (лёгкий путь, без БД — для товаров без ebay_url у нас)
+    "fetch_image_urls",
     # исключения (политика ошибок, SPEC.md §7)
     "ParseError",
     "TransportError",

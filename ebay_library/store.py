@@ -110,6 +110,42 @@ class Store:
                 "SELECT apply_item_snapshot($1, $2::jsonb)", zip, _item_payload(item),
             )
 
+    async def item_is_dead(self, item_id: str | int) -> bool | None:
+        """``is_dead`` товара; ``None`` — товара нет в ``items`` (никогда не парсился).
+        Нужен фото-методу для пред-проверки перед заливкой ``s3_key`` (см. ``photos``)."""
+        pool = await self._ensure_pool()
+        async with pool.acquire() as conn:
+            return await conn.fetchval(
+                "SELECT is_dead FROM items WHERE item_id=$1::bigint", int(item_id),
+            )
+
+    async def image_rows(self, item_id: str | int, *, limit: int | None = None) -> list[dict]:
+        """Строки галереи товара из ``item_images`` (по ``idx``), первые ``limit`` (None —
+        все). Каждая: ``idx``, ``ebay_url``, ``url_hash`` (hex md5), ``s3_key`` (или None).
+        Источник URL для скачивания фото и набор строк под ``s3_key`` (фото-метод)."""
+        pool = await self._ensure_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                "SELECT idx, ebay_url, encode(url_hash, 'hex') AS url_hash, s3_key "
+                "FROM item_images WHERE item_id = $1::bigint ORDER BY idx LIMIT $2::int",
+                int(item_id), limit,
+            )
+        return [dict(r) for r in rows]
+
+    async def set_image_s3_key(self, item_id: str | int, url_hash: str, s3_key: str) -> bool:
+        """Проставляет ``s3_key`` одной строке галереи (``item_id`` + ``url_hash`` hex).
+        Возвращает True, если строка обновлена (False — строка исчезла). Серверный guard
+        ``images_s3_guard`` бросит на мёртвом листинге — второй рубеж (фото-метод сам
+        пред-проверяет ``is_dead``)."""
+        pool = await self._ensure_pool()
+        async with pool.acquire() as conn:
+            tag = await conn.execute(
+                "UPDATE item_images SET s3_key = $1 "
+                "WHERE item_id = $2::bigint AND url_hash = decode($3, 'hex')",
+                s3_key, int(item_id), url_hash,
+            )
+        return int(tag.rsplit(" ", 1)[-1]) > 0  # "UPDATE <n>"
+
     async def close(self) -> None:
         if self._pool is not None:
             await self._pool.close()

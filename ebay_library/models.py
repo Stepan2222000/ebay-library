@@ -92,8 +92,10 @@ class ItemEnded:
 class ItemPage:
     """Страница товара (PDP), распарсенная JSON-first (SPEC.md §4.3).
 
-    Обязательны: ``item_number``, ``title``, ``seller``, ``location``, ``specifics``.
-    Опциональны (SPEC.md §7.4): ``condition`` (None — состояние не указано),
+    Обязательны: ``item_number``, ``title``, ``seller``.
+    Опциональны (SPEC.md §7.4): ``location`` (None — pickup-only листинг без доставки
+    либо eBay не отдал "Located in:"), ``specifics`` ({} — продавец не задал своих
+    характеристик; в блоке только Condition+Category), ``condition`` (None — состояние не указано),
     ``last_updated`` (None — листинг не редактировали), ``image_urls`` ([] — у
     листинга нет фото). ``price_usd`` и ``shipping_cost`` в **Mode 1 всегда None** —
     не парсим, приходят из каталога (SPEC.md §4.4); заполняются только в Mode 2 (§9).
@@ -105,8 +107,8 @@ class ItemPage:
     price_usd: float | None     # Mode 1: None (из каталога); Mode 2: USD
     shipping_cost: float | None  # Mode 1: None (из каталога); Mode 2: USD (0.0 = Free)
     seller: str                 # username продавца (как в каталоге)
-    location: str               # из "Located in: <...>"
-    specifics: dict[str, str]   # характеристики (key → value); без boilerplate-Condition
+    location: str | None        # из "Located in: <...>"; None — pickup-only/eBay не отдал
+    specifics: dict[str, str]   # характеристики (key → value); без boilerplate-Condition; {} — продавец не задал
     image_urls: list[str]       # большие версии фото (s-l1600), дедуп; [] — фото нет
     description: str            # текст описания ("" — валидно, если пусто)
     last_updated: str | None    # дата правки листинга, если есть; иначе None

@@ -11,8 +11,8 @@ from __future__ import annotations
 
 from curl_cffi import AsyncSession
 
-from .html.item import parse_item_page
-from .http.fetch import fetch_description, fetch_item
+from .html.item import _image_urls_from_html, parse_item_page
+from .http.fetch import fetch_description, fetch_item, make_item_session
 from .models import ItemPage
 
 
@@ -34,3 +34,26 @@ async def fetch_item_page(session: AsyncSession, item_id: str, *, prof=None) -> 
     if prof is not None:
         prof.switch("parse")
     return parse_item_page(html, description_html)
+
+
+async def fetch_image_urls(item_id: str | int) -> list[str]:
+    """``item_id`` → ссылки на фото (s-l1600, дедуп; ``ItemPage.image_urls``-набор).
+
+    Лёгкий путь «фото по id» для товаров, которых нет у нас в БД (нет ``ebay_url``):
+    ОДИН GET страницы товара (``fetch_item``, без описания) → извлечение только блока
+    ``PICTURE`` (``_image_urls_from_html``). Сессию строим внутри на один вызов — снаружи
+    нужен только ``item_id``.
+
+    Переиспользует транспорт (``fetch_item``: ретрай ``503``, ``TransportError``) и парс
+    (``_image_urls`` — общий с ``parse_item_page``). Исходы: настоящий листинг без фото →
+    ``[]``; ended/404/неожиданный статус → ``TransportError`` (наружу, не обрабатываем);
+    не листинг/нет модели → ``ParseError``.
+
+    ⚠️ Сессия создаётся НА КАЖДЫЙ вызов — это для ad-hoc «фото по id». Массовый обход
+    тысяч id так не гонять (curl_cffi не любит session-per-request) — там путь воркера."""
+    session = make_item_session(max_clients=1)
+    try:
+        html = await fetch_item(session, item_id)
+        return _image_urls_from_html(html, str(item_id))
+    finally:
+        await session.close()
