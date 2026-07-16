@@ -45,6 +45,8 @@ _PAID_RE = re.compile(
     re.I,
 )
 _SELLER_RE = re.compile(r"^(?P<seller>.+?)\s+\d+(?:\.\d+)?%\s+positive", re.I)
+# Строка «про доставку» вообще (для детекта незнакомых формулировок) — по ключевому слову.
+_SHIP_KW_RE = re.compile(r"\b(delivery|shipping|postage|P&P)\b", re.I)
 
 
 def _to_float(amount: str) -> float:
@@ -99,11 +101,15 @@ def _parse_card(card) -> SrpCard:
     if not currency_raw:
         raise ParseError("currency", praw, item_id, raw_html)
 
-    # Доставка ОПЦИОНАЛЬНА (None) для строк «без суммы» (самовывоз/грузовая/локальная
-    # доставка — цену eBay считает при оформлении): «Shipping not specified»
-    # (375075929359), «Free local pickup» (298273871260), «Freight» (267531699561),
-    # «Delivery or pickup available» (крупногабарит, live 2026-07: 303684073261).
-    # Любой другой не-матч — ParseError: вёрстка должна греметь.
+    # Доставка ОПЦИОНАЛЬНА (None) в двух случаях (корпус 184 прод-падений, 2026-07-16):
+    # 1) строка «без суммы» — самовывоз/грузовая/«Delivery or pickup available»
+    #    (крупногабарит, 303684073261) / «Shipping not specified» (375075929359):
+    #    цену доставки eBay считает при оформлении;
+    # 2) строки доставки НЕТ вообще при целых attribute-rows (133/133 в корпусе) —
+    #    международные листинги с таможней (import fees): доставка у товара есть
+    #    (видна на PDP), но в HTML выдачи eBay её не кладёт. None; авторитет — PDP.
+    # ГРЕМИМ (ParseError): незнакомая строка С ключевым словом доставки (новая
+    # формулировка eBay) или карточка совсем без attribute-rows (сломанная вёрстка).
     shipping_cost = None
     shipping_matched = False
     rows = [_txt(r, " ") for r in card.cssselect(Srp.CARD_ATTR_ROW)]
@@ -117,12 +123,15 @@ def _parse_card(card) -> SrpCard:
             shipping_cost = _to_float(sm.group("amount"))
             shipping_matched = True
             break
-    if not shipping_matched and not any(
-        re.match(r"^(Shipping not specified|Free local pickup|Freight|"
-                 r"Delivery or pickup)\b", t, re.I)
-        for t in rows
-    ):
-        raise ParseError("shipping_cost", None, item_id, raw_html)
+    if not shipping_matched:
+        unknown_ship_rows = [
+            t for t in rows
+            if _SHIP_KW_RE.search(t) and not re.match(
+                r"^(Shipping not specified|Free local pickup|Freight|"
+                r"Delivery or pickup)\b", t, re.I)
+        ]
+        if unknown_ship_rows or not rows:
+            raise ParseError("shipping_cost", None, item_id, raw_html)
 
     # Продавца якорим по строке "<ник> NN.N% positive" — единственный
     # стабильный признак. Класс .primary.large не уникален (им же помечены
