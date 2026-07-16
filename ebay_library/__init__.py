@@ -18,6 +18,7 @@
 from .errors import (
     AccessDeniedError,
     ErrorPageError,
+    ListingNotFoundError,
     ParseError,
     SessionDeadError,
     TransportError,
@@ -58,6 +59,7 @@ __all__ = [
     "ErrorPageError",
     "AccessDeniedError",
     "SessionDeadError",
+    "ListingNotFoundError",
     # модели данных
     "ItemPage",
     "ItemEnded",

@@ -15,7 +15,7 @@ payload без ``price_usd``/``shipping_cost`` (серверная ``apply_item_
 конкуренции). Каждый ``apply_*`` берёт соединение из пула на вызов. jsonb-codec и
 ``statement_cache_size=0`` (pgbouncer-ready, конвенция проекта) — в ``init`` пула.
 Item-воркер ставится **рядом с БД** (низкий RTT → запись дешёвая, батч не нужен;
-этап 5, решение A). ``apply_item_ended`` добавим на ended-этапе.
+этап 5, решение A).
 """
 
 from __future__ import annotations
@@ -109,6 +109,15 @@ class Store:
             return await conn.fetchval(
                 "SELECT apply_item_snapshot($1, $2::jsonb)", zip, _item_payload(item),
             )
+
+    async def apply_item_ended(self, item_id: str | int) -> dict:
+        """Товар подтверждённо завершён → ``apply_item_ended`` (is_dead, dead_reason='ended';
+        born-dead, если товара в ``items`` не было). Зовёт оркестратор при повторном 404
+        ebaydesc (см. ListingNotFoundError). Воскрешение — автоматом при следующем
+        catalog/PDP-наблюдении. Возвращает статистику применения."""
+        pool = await self._ensure_pool()
+        async with pool.acquire() as conn:
+            return await conn.fetchval("SELECT apply_item_ended($1::bigint)", int(item_id))
 
     async def item_is_dead(self, item_id: str | int) -> bool | None:
         """``is_dead`` товара; ``None`` — товара нет в ``items`` (никогда не парсился).

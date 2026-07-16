@@ -16,8 +16,8 @@
 
 Исходы (только пойманные на практике, SPEC.md §11.1): ``200`` → текст; ``503`` /
 сетевой сбой / таймаут → ретрай (§7.1), исчерпание → ``TransportError`` (критично,
-§7.2); прочий статус (включая ``404`` — ended-логику добавим позже) → ``TransportError``
-(громко падаем, чтобы поймать живьём).
+§7.2); ``404`` основного запроса (``fetch_item``) → ``ListingNotFoundError`` (страницы
+нет; ended-решение — у оркестратора по повтору); прочий статус → ``TransportError``.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ import asyncio
 from curl_cffi import AsyncSession
 from curl_cffi.requests import exceptions as _cex
 
-from ..errors import TransportError
+from ..errors import ListingNotFoundError, TransportError
 
 _ITM_URL = "https://itm.ebaydesc.com/itm/{item_id}"
 _DESC_URL = "https://itm.ebaydesc.com/itmdesc/{item_id}"
@@ -45,7 +45,7 @@ def make_item_session(*, max_clients: int, timeout: float = _TIMEOUT_S) -> Async
     return AsyncSession(max_clients=max_clients, timeout=timeout, headers=_HEADERS)
 
 
-async def _get_text(session: AsyncSession, url: str) -> str:
+async def _get_text(session: AsyncSession, url: str, *, ended_id: str | None = None) -> str:
     last: object = None
     for attempt in range(_RETRIES):
         try:
@@ -60,13 +60,18 @@ async def _get_text(session: AsyncSession, url: str) -> str:
             last = f"HTTP 503 {url}"
             await asyncio.sleep(_BACKOFF_S * (attempt + 1))
             continue
+        if r.status_code == 404 and ended_id is not None:
+            # страницы товара нет — не парсим, не ретраим (ebaydesc в пределах минут
+            # стабилен). Ended-решение — у оркестратора по повтору (см. ListingNotFoundError).
+            raise ListingNotFoundError(ended_id)
         raise TransportError(f"unexpected status {r.status_code} for {url}")
     raise TransportError(f"retries exhausted ({_RETRIES}) for {url}: {last!r}")
 
 
 async def fetch_item(session: AsyncSession, item_id: str) -> str:
-    """Сырой HTML страницы товара (основной запрос, SPEC.md §4.2)."""
-    return await _get_text(session, _ITM_URL.format(item_id=item_id))
+    """Сырой HTML страницы товара (основной запрос, SPEC.md §4.2). 404 →
+    ``ListingNotFoundError`` (листинга нет — оркестратор считает промахи)."""
+    return await _get_text(session, _ITM_URL.format(item_id=item_id), ended_id=str(item_id))
 
 
 async def fetch_description(session: AsyncSession, item_id: str) -> str:
