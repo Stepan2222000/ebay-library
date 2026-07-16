@@ -35,11 +35,13 @@ _TITLE_SUFFIX = "Opens in a new window or tab"
 # истины написаний (fx.currency_aliases).
 _PRICE_RE = re.compile(r"^(?P<cur>\D*?)(?P<amount>\d[\d,]*(?:\.\d{1,2})?)")
 _FREE_RE = re.compile(r"^Free\b.*\b(delivery|shipping|postage|P&P)\b", re.I)
-# Платная доставка: '+<токен><сумма> delivery/shipping…' — токен любой (его не
-# сохраняем; валюта доставки = валюта цены карточки). Ключевое слово обязательно
-# (иначе наивный матч поймал бы 'Free returns'/'30 days' и т.п.).
+# Платная доставка: '+<токен><сумма> [слова] delivery/shipping…' — токен любой (его не
+# сохраняем; валюта доставки = валюта цены карточки). Между суммой и ключевым словом
+# eBay вставляет срок ('+$13.85 next day delivery' — live 2026-07) — допускаем любые
+# слова. Ключевое слово обязательно (иначе наивный матч поймал бы 'Free returns' и т.п.).
 _PAID_RE = re.compile(
-    r"^\+?\s*\D*?(?P<amount>\d[\d,]*(?:\.\d{1,2})?)\s+(delivery|shipping|postage|P&P)\b",
+    r"^\+?\s*\D*?(?P<amount>\d[\d,]*(?:\.\d{1,2})?)\s+(?:[\w-]+\s+)*?"
+    r"(delivery|shipping|postage|P&P)\b",
     re.I,
 )
 _SELLER_RE = re.compile(r"^(?P<seller>.+?)\s+\d+(?:\.\d+)?%\s+positive", re.I)
@@ -97,11 +99,11 @@ def _parse_card(card) -> SrpCard:
     if not currency_raw:
         raise ParseError("currency", praw, item_id, raw_html)
 
-    # Доставка ОПЦИОНАЛЬНА (None) в трёх подтверждённых live случаях
-    # (2026-06-10): «Shipping not specified» (напр. 375075929359), карточка
-    # без строки доставки — только «Free local pickup» (самовывоз — не
-    # доставка, 298273871260), и «Freight» (грузовая, суммы на выдаче нет,
-    # 267531699561). Любой другой не-матч — ParseError: вёрстка должна греметь.
+    # Доставка ОПЦИОНАЛЬНА (None) для строк «без суммы» (самовывоз/грузовая/локальная
+    # доставка — цену eBay считает при оформлении): «Shipping not specified»
+    # (375075929359), «Free local pickup» (298273871260), «Freight» (267531699561),
+    # «Delivery or pickup available» (крупногабарит, live 2026-07: 303684073261).
+    # Любой другой не-матч — ParseError: вёрстка должна греметь.
     shipping_cost = None
     shipping_matched = False
     rows = [_txt(r, " ") for r in card.cssselect(Srp.CARD_ATTR_ROW)]
@@ -116,7 +118,8 @@ def _parse_card(card) -> SrpCard:
             shipping_matched = True
             break
     if not shipping_matched and not any(
-        re.match(r"^(Shipping not specified|Free local pickup|Freight)\b", t, re.I)
+        re.match(r"^(Shipping not specified|Free local pickup|Freight|"
+                 r"Delivery or pickup)\b", t, re.I)
         for t in rows
     ):
         raise ParseError("shipping_cost", None, item_id, raw_html)
