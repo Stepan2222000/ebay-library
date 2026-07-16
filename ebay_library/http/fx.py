@@ -22,7 +22,7 @@ import httpx
 
 from ..models import CatalogItem, SrpCard
 
-FX_API_URL = os.environ.get("FX_API_URL", "http://194.164.245.107:8092")
+FX_API_URL = os.environ.get("FX_API_URL", "http://2.27.20.221:8092")
 _TIMEOUT = httpx.Timeout(10.0)
 # без лимита одновременных соединений (только пул httpx)
 _LIMITS = httpx.Limits(max_connections=None, max_keepalive_connections=None)

@@ -29,7 +29,7 @@ from .models import Catalog, ItemPage
 
 EBAY_DATA_DSN = os.environ.get(
     "EBAY_DATA_DSN",
-    "postgresql://admin:Password123@194.164.245.107:5415/ebay_data",
+    "postgresql://admin:Password123@2.27.20.221:5415/ebay_data",
 )
 
 
