@@ -6,9 +6,11 @@
 ``GET /convert?amount=&from=<токен>&to=USD``. Эндпоинт сам резолвит написание и
 держит курсы в своём кэше (TTL).
 
-Без фолбеков: неизвестная валюта (404) или недоступность сервиса
-(сеть/таймаут/5xx) → исключение httpx наружу. Сбой fx критичен — валит задачу
-целиком.
+Сетевые обрывы (сервис под параллельным залпом сбрасывает часть соединений —
+83 прод-падения: RemoteProtocol/Connect/ReadError, все из ``_convert``) —
+транзиент: до ``_RETRIES`` попыток с короткой паузой. Ответ сервиса остаётся
+честным фаталом без повторов: неизвестная валюта (404) или 5xx → исключение
+наружу, валит задачу целиком.
 
 URL эндпоинта: ``FX_API_URL`` (env), дефолт — публичный адрес сервиса.
 """
@@ -26,14 +28,23 @@ FX_API_URL = os.environ.get("FX_API_URL", "http://2.27.20.221:8092")
 _TIMEOUT = httpx.Timeout(10.0)
 # без лимита одновременных соединений (только пул httpx)
 _LIMITS = httpx.Limits(max_connections=None, max_keepalive_connections=None)
+_RETRIES = 3          # попыток на сетевой обрыв (transport-уровень)
+_RETRY_PAUSE_S = 0.5  # пауза между попытками (растёт линейно)
 
 
 async def _convert(client: httpx.AsyncClient, amount: float, currency_raw: str) -> float:
-    r = await client.get(
-        "/convert", params={"amount": amount, "from": currency_raw, "to": "USD"}
-    )
-    r.raise_for_status()  # 404 (нет валюты) / 5xx → наружу
-    return float(r.json()["result"])
+    for attempt in range(1, _RETRIES + 1):
+        try:
+            r = await client.get(
+                "/convert", params={"amount": amount, "from": currency_raw, "to": "USD"}
+            )
+        except httpx.TransportError:  # обрыв/таймаут соединения — транзиент
+            if attempt == _RETRIES:
+                raise
+            await asyncio.sleep(_RETRY_PAUSE_S * attempt)
+            continue
+        r.raise_for_status()  # 404 (нет валюты) / 5xx → наружу, без повторов
+        return float(r.json()["result"])
 
 
 async def convert_cards(cards: list[SrpCard], *, base_url: str = FX_API_URL) -> list[CatalogItem]:
