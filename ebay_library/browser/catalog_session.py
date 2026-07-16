@@ -17,15 +17,18 @@
 2. **Pardon чиним повторным ``warmup`` (на главную), а НЕ навигацией на упавший URL:**
    goto на упавший SRP-URL ~17% ломал следующий fetch, на главную — 6/6 ok.
 
-- **Pardon** → ``_recover_pardon`` (повторный ``warmup`` на главную) + ``controller.backoff_now``;
-- **Access Denied** → ``_swap`` (новая страница из ``get_page`` — новый прокси) +
-  ``controller.reset``; старую страницу НЕ закрываем (утилизирует оркестратор);
-- **Error Page / неожиданный тип / смерть вкладки / непойманное** → критично (наружу).
-Без лимита починок (контроллер тормозит).
-
-⚠️  ПРЕДВАРИТЕЛЬНО (под живую доводку): контур проверен ОФЛАЙН (мок-страница) + механика
-обрыва живьём, но end-to-end под РЕАЛЬНЫМ Pardon не прогонялся — антибот на прогретой
-сессии не вызывается (страховка). Живьём проверяется только инжектом синтетики.
+Единый контур ``_recover(need_new_page)`` для всех транзиентов (доказано стендом на
+сервере 31.77.159.82, 8 потребителей, все аварии → 0 потерь):
+- **Pardon / nav (страницу увели) / blocked (fetch зарезан)** → прогрев текущей страницы
+  (``_recover(need_new_page=False)``) + ``controller.backoff_now``;
+- **Access Denied / dead (смерть вкладки)** → новая страница из ``get_page`` — новый прокси
+  (``_recover(need_new_page=True)``) + ``controller.reset``; старую НЕ закрываем;
+- прогрев не идёт → ``WARMUP_TRIES`` попыток → эскалация в новую страницу;
+- новую тоже не взять/прогреть (обычно мёртвый браузер) → сессия помечается мёртвой,
+  ``SessionDeadError`` наружу: оркестратор пересоздаёт браузер+сессию (не ретрай задачи).
+Транзиент теряет не деталь, а лишь пару секунд: fetch чинится и повторяется ВНУТРИ.
+Наружу критично только Error Page / неожиданный тип / незнакомый сбой fetch (§7.2).
+Без лимита починок на fetch (контроллер тормозит; внешний PART_TIMEOUT — потолок).
 """
 
 from __future__ import annotations
@@ -33,7 +36,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from ..errors import ErrorPageError
+from ..errors import ErrorPageError, SessionDeadError
 from ..html.page_state import Antibot, PageKind, detect_state_html
 from ..html.srp import parse_search_page
 from ..http.fx import convert_cards
@@ -47,29 +50,56 @@ MAX_PAGES = 5
 
 # JS: same-origin fetch с куками. Возвращаем финальный URL (после редиректов — Pardon
 # уводит на /splashui/challenge), статус и полное тело. p50-латентность — performance.now().
+# AbortSignal.timeout: висящий fetch (мёртвый прокси/blackhole) сам оборвётся ошибкой,
+# а не повиснет навечно — иначе деталь ждёт весь внешний PART_TIMEOUT (живой инцидент 02.07).
 _FETCH_JS = """
-async (url) => {
+async ({url, timeout_ms}) => {
   const t0 = performance.now();
-  const r = await fetch(url, { credentials: 'include' });
+  const r = await fetch(url, { credentials: 'include', signal: AbortSignal.timeout(timeout_ms) });
   const body = await r.text();
   return { url: r.url, status: r.status, body, ms: performance.now() - t0 };
 }
 """
 
 
+def _fetch_error_kind(exc: Exception) -> str | None:
+    """Классифицирует сбой in-page fetch по СОБЫТИЮ (текст исключения playwright).
+    → 'nav'  : страницу увели навигацией (challenge/reload eBay) — лечится прогревом;
+      'dead' : вкладка/таргет умерли — нужна новая страница (прогрев трупа бесполезен);
+      'blocked': fetch зарезан (CSP challenge-страницы / сеть / таймаут) — лечится прогревом;
+      None   : незнакомый сбой — наружу без ретраев (честный фатал, SPEC.md §7.2).
+    Разделение доказано стендом (сервер 31.77.159.82): nav/blocked снимаются goto на
+    главную, dead — только swap."""
+    s = str(exc)
+    if "Execution context was destroyed" in s:
+        return "nav"
+    if "Target crashed" in s or "Target closed" in s or "has been closed" in s:
+        return "dead"
+    if "Failed to fetch" in s or "signal timed out" in s or "TimeoutError" in s:
+        return "blocked"
+    return None
+
+
 async def warmup(page) -> None:
     """Прогрев = заход на главную eBay → страница получает/обновляет антибот-клиренс.
 
     Один примитив для трёх ситуаций: первичный прогрев (старт), прогрев новой страницы
-    (swap при Access Denied) и снятие Pardon (повторный прогрев, ``_recover_pardon``).
-    Без него первый SRP ловит антифрод (SPEC.md §5.1)."""
+    (swap при Access Denied/смерти вкладки) и снятие Pardon/челленджа (повторный прогрев,
+    ``_heal``). Без него первый SRP ловит антифрод (SPEC.md §5.1)."""
     await page.goto(_HOME_URL, wait_until="domcontentloaded")
     logger.debug("catalog warmup ok: %s", page.url)
 
 
-async def in_page_fetch(page, url: str) -> dict:
-    """``fetch`` URL изнутри страницы (same-origin, с куками). → {url, status, body, ms}."""
-    return await page.evaluate(_FETCH_JS, url)
+async def in_page_fetch(page, url: str, timeout_ms: int, eval_timeout_s: float) -> dict:
+    """``fetch`` URL изнутри страницы (same-origin, с куками). → {url, status, body, ms}.
+
+    Двойной таймаут: ``AbortSignal`` рвёт сам fetch внутри страницы, а внешний
+    ``wait_for`` страхует от НЕМОГО зависания — крэшнутая вкладка не бросает ошибку из
+    ``evaluate``, а молчит навсегда (стенд 31.77.159.82). Внешний таймаут = таймаут
+    fetch + запас; сработал → вкладку считаем мёртвой (``asyncio.TimeoutError`` наверх)."""
+    return await asyncio.wait_for(
+        page.evaluate(_FETCH_JS, {"url": url, "timeout_ms": timeout_ms}),
+        timeout=eval_timeout_s)
 
 
 class CatalogSession:
@@ -81,6 +111,13 @@ class CatalogSession:
     ``_lock`` сериализует только починку; обычные ``fetch_srp`` от N потребителей идут
     параллельно."""
 
+    FETCH_TIMEOUT_MS = 60_000     # таймаут самого fetch (AbortSignal внутри страницы)
+    EVAL_TIMEOUT_S = 75.0         # внешний потолок evaluate = fetch + запас (немой крэш вкладки)
+    WARMUP_TRIES = 10            # попыток прогрева до эскалации в новую страницу (§7.3)
+    WARMUP_PAUSE_S = 1.0        # пауза между попытками прогрева
+    RECOVER_TIMEOUT_S = 120.0    # потолок на весь контур починки: get_page на мёртвом
+                                 # браузере виснет навсегда → без него тихий дедлок (инцидент 02.07)
+
     def __init__(self, get_page, *, controller=None, on_fetch=None):
         self._get_page = get_page
         self._controller = controller
@@ -90,6 +127,7 @@ class CatalogSession:
         self._epoch = 0                    # счётчик починок (различает «оборвала починка» vs сбой)
         self._ready = asyncio.Event()      # ворота: установлено, когда НЕ идёт починка
         self._ready.set()
+        self._dead = False                 # сессия признана мёртвой → все fetch падают сразу
 
     @property
     def page(self):
@@ -100,71 +138,108 @@ class CatalogSession:
         return self._epoch
 
     async def start(self):
-        """Берёт первую страницу у оркестратора и прогревает её."""
+        """Берёт первую страницу у оркестратора и прогревает её (с ретраями)."""
         self._page = await self._get_page()
-        await warmup(self._page)
+        await self._warmup_retries(self._page)
         return self._page
 
     async def fetch_srp(self, url: str) -> str:
-        """In-page fetch SRP + восстановление (см. шапку). Возвращает HTML готовой
-        выдачи; Error Page / неожиданный тип / смерть вкладки → критично наружу."""
+        """In-page fetch SRP + восстановление (см. шапку). Возвращает HTML готовой выдачи.
+
+        Транзиент (антибот увёл страницу / зарезал fetch / смерть вкладки) — это событие
+        СЕССИИ, а не сбой задачи: чиним и повторяем внутри себя, наружу деталь не теряется.
+        Наружу летят только: Error Page / неожиданный тип (§7.2), незнакомый сбой fetch и
+        ``SessionDeadError`` (сессию не починить — оркестратор пересоздаёт браузер)."""
         while True:
             await self._ready.wait()        # идёт починка — новый fetch ждёт (не стартуем в навигацию)
+            if self._dead:                  # сессия мертва → сразу наружу (не виснем на трупе)
+                raise SessionDeadError("catalog session dead")
             epoch = self._epoch
             page = self._page
             try:
-                res = await in_page_fetch(page, url)
-            except Exception:
+                res = await in_page_fetch(page, url, self.FETCH_TIMEOUT_MS, self.EVAL_TIMEOUT_S)
+            except asyncio.TimeoutError:
                 if self._epoch != epoch:    # починка во время моего fetch → обрыв «наш» → повтор
                     continue
-                raise                        # настоящий сбой / смерть вкладки → критично (§7.2)
-            state = detect_state_html(res["url"], res["body"])
-            if state.antibot is Antibot.ERROR_PAGE:
-                raise ErrorPageError(f"Error Page at {res['url']}")
-            if state.antibot is Antibot.ACCESS_DENIED:
-                await self._swap(epoch)
-                continue
-            if state.antibot is Antibot.PARDON or state.kind is PageKind.PARDON:
-                await self._recover_pardon(epoch)
-                continue
-            if state.kind is not PageKind.SRP:
-                raise ErrorPageError(f"unexpected page kind {state.kind.value} at {res['url']}")
-            if self._on_fetch is not None:  # per-fetch латентность (мс) → окно контроллера
-                self._on_fetch(res["ms"])
-            return res["body"]
+                kind = "dead"               # evaluate молчит дольше таймаута → вкладка невменяема
+            except Exception as e:
+                if self._epoch != epoch:
+                    continue
+                kind = _fetch_error_kind(e)
+                if kind is None:            # незнакомый сбой → критично наружу (§7.2)
+                    raise
+            else:
+                state = detect_state_html(res["url"], res["body"])
+                if state.antibot is Antibot.ERROR_PAGE:
+                    raise ErrorPageError(f"Error Page at {res['url']}")
+                if state.antibot is Antibot.ACCESS_DENIED:
+                    await self._recover(epoch, need_new_page=True)   # новый прокси
+                    continue
+                if state.antibot is Antibot.PARDON or state.kind is PageKind.PARDON:
+                    await self._recover(epoch, need_new_page=False)  # снять челлендж прогревом
+                    continue
+                if state.kind is not PageKind.SRP:
+                    raise ErrorPageError(f"unexpected page kind {state.kind.value} at {res['url']}")
+                if self._on_fetch is not None:  # per-fetch латентность (мс) → окно контроллера
+                    self._on_fetch(res["ms"])
+                return res["body"]
+            # сюда попадаем только на восстановимом сбое fetch (nav/blocked/dead)
+            await self._recover(epoch, need_new_page=(kind == "dead"))
 
-    async def _recover_pardon(self, epoch: int) -> None:
-        """Pardon: повторный ``warmup`` (на главную) снимает антибот и оставляет рабочую
-        страницу; goto на упавший URL ломал следующий fetch (живой тест). Один на всех."""
+    async def _recover(self, epoch: int, *, need_new_page: bool) -> None:
+        """Единый контур починки — один лекарь на всех (мьютекс), остальные ждут у ворот
+        и повторяют fetch. Всё под таймаутом: get_page на мёртвом браузере виснет навсегда;
+        не вылечили → сессия помечается мёртвой (``SessionDeadError`` наружу)."""
         async with self._lock:
+            if self._dead:
+                raise SessionDeadError("catalog session dead")
             if self._epoch != epoch:        # уже починил другой потребитель
                 return
-            logger.info("catalog Pardon → re-warmup (главная)")
             self._ready.clear()             # ворота: новые fetch ждут
             self._epoch += 1                # ДО навигации: летящие aborts увидят смену → повтор
             try:
-                await warmup(self._page)
-                if self._controller is not None:
-                    self._controller.backoff_now()
+                await asyncio.wait_for(self._heal(need_new_page),
+                                       timeout=self.RECOVER_TIMEOUT_S)
+            except Exception as e:
+                self._dead = True           # все ждущие упадут сразу, никто не виснет на трупе
+                logger.error("catalog session dead: recovery failed (%.90s)", e)
+                raise SessionDeadError(str(e)) from e
             finally:
                 self._ready.set()
 
-    async def _swap(self, epoch: int) -> None:
-        """Access Denied: новая страница от оркестратора (новый прокси). Один на всех."""
-        async with self._lock:
-            if self._epoch != epoch:
-                return
-            logger.info("catalog Access Denied → swap page (get_page)")
-            self._ready.clear()
+    async def _heal(self, need_new_page: bool) -> None:
+        """Прогрев текущей страницы; при провале (или сразу для мёртвой вкладки) —
+        новая страница от оркестратора. Не прогрелась и она → наружу (→ сессия мертва)."""
+        if not need_new_page:
             try:
-                page = await self._get_page()   # новый прокси/контекст — даёт оркестратор
-                await warmup(page)
-                self._page = page               # старую НЕ закрываем (утилизирует оркестратор)
-                self._epoch += 1
+                await self._warmup_retries(self._page)
                 if self._controller is not None:
-                    self._controller.reset()
-            finally:
-                self._ready.set()
+                    self._controller.backoff_now()
+                return
+            except Exception as e:
+                logger.error("catalog re-warmup не удался за %d попыток (%.90s) → новая страница",
+                             self.WARMUP_TRIES, e)
+        page = await self._get_page()       # новый прокси/контекст — даёт оркестратор
+        await self._warmup_retries(page)    # старую НЕ закрываем (утилизирует оркестратор)
+        self._page = page
+        if self._controller is not None:
+            self._controller.reset()
+
+    async def _warmup_retries(self, page) -> None:
+        """``warmup`` до ``WARMUP_TRIES`` попыток; все упали → исключение наружу. Транзиентный
+        обрыв прогрева (ERR_ABORTED на редиректе антибота, живой тест) — не смертельный."""
+        last = None
+        for i in range(1, self.WARMUP_TRIES + 1):
+            try:
+                await warmup(page)
+                if i > 1:
+                    logger.info("catalog warmup удался с попытки %d", i)
+                return
+            except Exception as e:
+                last = e
+                logger.warning("catalog warmup %d/%d не удался: %.90s", i, self.WARMUP_TRIES, e)
+                await asyncio.sleep(self.WARMUP_PAUSE_S)
+        raise last
 
     async def fetch_catalog(
         self,

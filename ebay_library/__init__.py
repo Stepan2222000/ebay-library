@@ -19,6 +19,7 @@ from .errors import (
     AccessDeniedError,
     ErrorPageError,
     ParseError,
+    SessionDeadError,
     TransportError,
 )
 from .item import PhotoResult, fetch_image_urls, listing_status
@@ -56,6 +57,7 @@ __all__ = [
     "TransportError",
     "ErrorPageError",
     "AccessDeniedError",
+    "SessionDeadError",
     # модели данных
     "ItemPage",
     "ItemEnded",
