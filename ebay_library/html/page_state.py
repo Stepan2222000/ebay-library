@@ -121,6 +121,20 @@ def detect_state_html(response_url: str, html: str) -> PageState:
     return detect_state(response_url, title)
 
 
+# eBay пишет class без кавычек: <h1 id=srp-results-heading class=srp-controls__count-heading>
+_SRP_COUNT_HEADING_RE = re.compile(r"<h1[^>]*\bclass=[\"']?[^\"'>]*srp-controls__count-heading", re.I)
+
+
+def srp_rendered(html: str) -> bool:
+    """Выдача реально отрисована? eBay отдаёт с кодом 200 и обычным <title> «X for sale | eBay»
+    серверные заглушки без блока результатов («There seems to be a problem serving the
+    request…» или одна шапка сайта). Признак настоящей выдачи, включая 0 results, —
+    ``h1.srp-controls__count-heading``. По тексту различать нельзя: фразы ошибок лежат
+    в JS-словаре GLOBAL_CONTENT на каждой странице. Транзиент (те же детали в соседние
+    дни фетчатся нормально) → повтор fetch в catalog_session, не ParseError."""
+    return _SRP_COUNT_HEADING_RE.search(html) is not None
+
+
 def is_ready(state: PageState, expect: PageKind) -> bool:
     """Страница готова: не antibot и тип совпал с ожидаемым."""
     return state.antibot is None and state.kind is expect

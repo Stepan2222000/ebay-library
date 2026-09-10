@@ -197,6 +197,16 @@ def _parse_card(card) -> SrpCard:
     )
 
 
+def _is_stub_card(li) -> bool:
+    """Незаполненный шаблон карточки в первом слоте выдачи (data-view iid:1): заголовок
+    пуст, цены нет, внутри только продавец или одно «Sponsored». Пропускаем, а не
+    ParseError — иначе теряется вся деталь. На нормальных карточках не срабатывает."""
+    t = _one(li, Srp.CARD_TITLE)
+    if t is not None and _txt(t):
+        return False
+    return _one(li, Srp.CARD_PRICE) is None
+
+
 def parse_search_page(html: str) -> SearchPage:
     """Парсит HTML страницы выдачи. ParseError, если обязательное поле
     (счётчик результатов или поле карточки) не распарсилось. Caller гарантирует,
@@ -234,6 +244,8 @@ def parse_search_page(html: str) -> SearchPage:
         classes = (li.get("class") or "").split()
         if "s-card" in classes and li.get("data-listingid"):
             if len(li.get("data-listingid") or "") != 12:  # placeholder
+                continue
+            if _is_stub_card(li):
                 continue
             items.append(_parse_card(li))
 

@@ -37,7 +37,7 @@ import asyncio
 import logging
 
 from ..errors import ErrorPageError, SessionDeadError
-from ..html.page_state import Antibot, PageKind, detect_state_html
+from ..html.page_state import Antibot, PageKind, detect_state_html, srp_rendered
 from ..html.srp import parse_search_page
 from ..http.fx import convert_cards
 from ..models import Catalog, CatalogItem, CatalogResult, SrpCard
@@ -115,6 +115,8 @@ class CatalogSession:
     EVAL_TIMEOUT_S = 75.0         # внешний потолок evaluate = fetch + запас (немой крэш вкладки)
     WARMUP_TRIES = 10            # попыток прогрева до эскалации в новую страницу (§7.3)
     WARMUP_PAUSE_S = 1.0        # пауза между попытками прогрева
+    SHELL_RETRIES = 3           # SRP-заглушка eBay (200 без результатов) → повторы fetch
+    SHELL_PAUSE_S = 2.0         # пауза между ними
     RECOVER_TIMEOUT_S = 120.0    # потолок на весь контур починки: get_page на мёртвом
                                  # браузере виснет навсегда → без него тихий дедлок (инцидент 02.07)
 
@@ -150,6 +152,7 @@ class CatalogSession:
         СЕССИИ, а не сбой задачи: чиним и повторяем внутри себя, наружу деталь не теряется.
         Наружу летят только: Error Page / неожиданный тип (§7.2), незнакомый сбой fetch и
         ``SessionDeadError`` (сессию не починить — оркестратор пересоздаёт браузер)."""
+        shells = 0                          # подряд полученных SRP-заглушек (см. srp_rendered)
         while True:
             await self._ready.wait()        # идёт починка — новый fetch ждёт (не стартуем в навигацию)
             if self._dead:                  # сессия мертва → сразу наружу (не виснем на трупе)
@@ -180,6 +183,15 @@ class CatalogSession:
                     continue
                 if state.kind is not PageKind.SRP:
                     raise ErrorPageError(f"unexpected page kind {state.kind.value} at {res['url']}")
+                if not srp_rendered(res["body"]):
+                    # серверная заглушка eBay вместо выдачи — транзиент: повторяем fetch;
+                    # исчерпание → ErrorPageError (лейн даёт детали второй заход), не ParseError.
+                    shells += 1
+                    if shells > self.SHELL_RETRIES:
+                        raise ErrorPageError(f"SRP not rendered after {shells - 1} retries at {res['url']}")
+                    logger.warning("SRP-заглушка eBay (%d/%d) → повтор: %s", shells, self.SHELL_RETRIES, url)
+                    await asyncio.sleep(self.SHELL_PAUSE_S)
+                    continue
                 if self._on_fetch is not None:  # per-fetch латентность (мс) → окно контроллера
                     self._on_fetch(res["ms"])
                 return res["body"]
