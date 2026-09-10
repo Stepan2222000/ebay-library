@@ -93,13 +93,27 @@ def _parse_card(card) -> SrpCard:
     praw = _txt(pe, " ") if pe is not None else None
     if not praw or " to " in praw.lower():
         raise ParseError("price", praw, item_id, raw_html)
-    pm = _PRICE_RE.match(re.sub(r"\s+", " ", praw).strip())
-    if not pm:
-        raise ParseError("price", praw, item_id, raw_html)
-    price = _to_float(pm.group("amount"))
-    currency_raw = pm.group("cur").strip()  # сырой токен ('$','US $','C $'…) — переведёт fx
-    if not currency_raw:
-        raise ParseError("currency", praw, item_id, raw_html)
+    praw_n = re.sub(r"\s+", " ", praw).strip()
+    if praw_n.lower() == "see price":
+        # MAP-цена («See price»): eBay прячет цену продажи до корзины, в выдаче — только
+        # зачёркнутая справочная сумма. Цена карточки = None (решение 2026-09-10; раньше
+        # ParseError ронял ВСЮ деталь, 21–29 деталей/день с июля). Валюту для доставки
+        # берём из зачёркнутой суммы (в корпусе 29/29 карточек она есть).
+        price = None
+        currency_raw = None
+        st = _one(card, Srp.CARD_PRICE_STRIKE)
+        if st is not None:
+            sm2 = _PRICE_RE.match(_txt(st, " ").strip())
+            if sm2 and sm2.group("cur").strip():
+                currency_raw = sm2.group("cur").strip()
+    else:
+        pm = _PRICE_RE.match(praw_n)
+        if not pm:
+            raise ParseError("price", praw, item_id, raw_html)
+        price = _to_float(pm.group("amount"))
+        currency_raw = pm.group("cur").strip()  # сырой токен ('$','US $','C $'…) — переведёт fx
+        if not currency_raw:
+            raise ParseError("currency", praw, item_id, raw_html)
 
     # Доставка ОПЦИОНАЛЬНА (None) в двух случаях (корпус 184 прод-падений, 2026-07-16):
     # 1) строка «без суммы» — самовывоз/грузовая/«Delivery or pickup available»

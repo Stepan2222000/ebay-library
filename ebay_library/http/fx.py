@@ -59,8 +59,9 @@ async def convert_cards(cards: list[SrpCard], *, base_url: str = FX_API_URL) -> 
 
     pairs: set[tuple[float, str]] = set()
     for c in cards:
-        pairs.add((c.price, c.currency_raw))
-        if c.shipping_cost:  # 0.0 (Free) и None пропускаем — переводить нечего
+        if c.price is not None:                    # None — «See price» (MAP), переводить нечего
+            pairs.add((c.price, c.currency_raw))
+        if c.shipping_cost and c.currency_raw:     # 0.0 (Free) и None пропускаем — переводить нечего
             pairs.add((c.shipping_cost, c.currency_raw))
     pairs_list = list(pairs)
 
@@ -72,13 +73,18 @@ async def convert_cards(cards: list[SrpCard], *, base_url: str = FX_API_URL) -> 
 
     out: list[CatalogItem] = []
     for c in cards:
-        ship_usd = usd[(c.shipping_cost, c.currency_raw)] if c.shipping_cost else c.shipping_cost
+        if c.shipping_cost and c.currency_raw:
+            ship_usd = usd[(c.shipping_cost, c.currency_raw)]
+        elif c.shipping_cost:                      # сумма есть, валюты нет → не знаем
+            ship_usd = None
+        else:
+            ship_usd = c.shipping_cost
         out.append(
             CatalogItem(
                 item_id=c.item_id,
                 title=c.title,
                 condition=c.condition,
-                price=usd[(c.price, c.currency_raw)],
+                price=usd[(c.price, c.currency_raw)] if c.price is not None else None,
                 shipping_cost=ship_usd,
                 seller=c.seller,
                 location=c.location,

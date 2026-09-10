@@ -24,8 +24,8 @@ class SrpCard:
     item_id: str               # 12 цифр (placeholder "Shop on eBay" отсеян)
     title: str                 # без суффикса "Opens in a new window or tab"
     condition: str | None      # "new" | "other"; None — карточка без состояния (live-кейс)
-    price: float               # сумма в исходной валюте
-    currency_raw: str          # валютный токен как на сайте ('$','US $','C $','EUR'…)
+    price: float | None        # сумма в исходной валюте; None — «See price» (MAP, см. srp.py)
+    currency_raw: str | None   # валютный токен как на сайте ('$','US $','C $','EUR'…); None — не из чего взять
     shipping_cost: float | None  # исходная валюта; 0.0 = Free; None = not specified/самовывоз/freight
     seller: str | None         # None штатно: вариант SRP без блока продавца (см. srp.py); БД пишет seller_id NULL, PDP дозаполняет
     location: str | None       # из "Located in <...>"; eBay рендерит лениво/не всегда
@@ -42,7 +42,7 @@ class CatalogItem:
     item_id: str            # 12 цифр
     title: str              # без суффикса "Opens in a new window or tab"
     condition: str | None   # "new" | "other"; None — карточка без состояния
-    price: float            # в USD
+    price: float | None     # в USD; None — «See price» (MAP): цены в выдаче нет
     shipping_cost: float | None  # в USD; 0.0 = Free; None = не указана/самовывоз/freight
     seller: str | None      # None штатно: вариант SRP без блока продавца (см. srp.py); PDP дозаполняет
     location: str | None    # из "Located in <...>"; None допустим (lazy-рендер)

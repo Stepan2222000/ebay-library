@@ -18,6 +18,7 @@ class Srp:
     CARD_TITLE = ".s-card__title"
     CARD_SUBTITLE_SPANS = ".s-card__subtitle .su-styled-text"
     CARD_PRICE = ".s-card__price"
+    CARD_PRICE_STRIKE = ".s-card__attribute-row .strikethrough"   # зачёркнутая сумма у «See price»
     CARD_ATTR_ROW = ".s-card__attribute-row"
     CARD_IMG = "img.s-card__image"
     # продавца якорим по строке "% positive" среди этих кандидатов
